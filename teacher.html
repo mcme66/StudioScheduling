@@ -250,6 +250,7 @@
     <label>Week of</label>
     <input type="date" id="weekStart">
     <span class="week-label" id="weekLabel"></span>
+    <span class="week-label" id="syncStatus" style="margin-left:auto;font-size:12px;max-width:280px;text-align:right"></span>
   </div>
 
   <div class="day-grid" id="dayGrid"></div>
@@ -689,7 +690,13 @@ function applyData(data) {
   renderAll();
 }
 
-subscribeSchedule(applyData);
+function setSyncStatus(message) {
+  const el = document.getElementById('syncStatus');
+  el.textContent = message || '';
+  el.style.color = message ? 'var(--accent)' : '';
+}
+
+subscribeSchedule(applyData, { onStatus: setSyncStatus });
 </script>
 </body>
 </html>

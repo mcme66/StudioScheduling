@@ -81,6 +81,14 @@ function writeData(data) {
 const app = express();
 app.use(express.json({ limit: '256kb' }));
 
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true });
+});
+
+app.get('/', (_req, res) => {
+  res.redirect('/index.html');
+});
+
 app.get('/api/schedule', (_req, res) => {
   const current = readData();
   const pruned = prune(current);
@@ -103,8 +111,8 @@ app.put('/api/schedule', (req, res) => {
 
 app.use(express.static(ROOT));
 
-app.listen(PORT, () => {
-  console.log(`Lesson scheduler running at http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Lesson scheduler running on port ${PORT}`);
   console.log(`  Student page:  http://localhost:${PORT}/index.html`);
   console.log(`  Teacher page:  http://localhost:${PORT}/teacher.html`);
   console.log(`  Database file: data/schedule.json`);

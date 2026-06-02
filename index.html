@@ -172,6 +172,7 @@
 
 <div class="main">
 
+  <div class="week-banner" id="syncBanner" style="display:none;margin-bottom:.75rem;font-size:13px"></div>
   <div class="week-banner" id="weekBanner">Loading schedule...</div>
 
   <div id="successBox" class="success-box">
@@ -395,7 +396,18 @@ function applyData(data) {
   render();
 }
 
-subscribeSchedule(applyData);
+function setSyncStatus(message) {
+  const el = document.getElementById('syncBanner');
+  if (!message) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'block';
+  el.style.color = 'var(--accent)';
+  el.textContent = message;
+}
+
+subscribeSchedule(applyData, { onStatus: setSyncStatus });
 </script>
 </body>
 </html>
