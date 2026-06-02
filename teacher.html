@@ -136,28 +136,62 @@
   .p-student { font-size: 11px; color: var(--green); margin-left: auto; }
   .empty-note { font-size: 13px; color: var(--muted); padding: .5rem 0; }
 
-  .actions-box {
+  .share-box {
     background: var(--white); border: 1px solid var(--border);
     border-radius: 12px; padding: 1.25rem;
-    display: flex; flex-direction: column; gap: 10px;
   }
-  .action-btn {
-    font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 500;
-    padding: 10px 16px; border-radius: 8px; cursor: pointer;
-    border: 1px solid var(--border); text-align: left;
-    display: flex; align-items: center; gap: 10px; width: 100%;
-    transition: background .15s;
+  .share-layout {
+    display: grid; grid-template-columns: auto 1fr; gap: 1.25rem; align-items: start;
   }
-  .action-btn.primary { background: var(--accent); color: white; border-color: var(--accent); }
-  .action-btn.primary:hover { background: #a83314; }
-  .action-btn.secondary { background: var(--paper); color: var(--ink); }
-  .action-btn.secondary:hover { background: var(--cream); }
-  .action-btn .icon { font-size: 16px; }
-  .action-btn .desc { font-size: 11px; font-weight: 400; color: inherit; opacity: .75; margin-top: 1px; }
-
-  .hint { font-size: 12px; color: var(--muted); line-height: 1.6; padding: .75rem; background: var(--cream); border-radius: 8px; }
-  .hint a { color: var(--accent); text-decoration: none; font-weight: 500; }
-  .hint a:hover { text-decoration: underline; }
+  @media (max-width: 640px) {
+    .share-layout { grid-template-columns: 1fr; justify-items: center; }
+  }
+  .share-qr-col { text-align: center; }
+  .share-qr-col img {
+    display: block; width: 140px; height: 140px;
+    border: 1px solid var(--border); border-radius: 10px; background: white;
+  }
+  .share-qr-dl {
+    margin-top: 8px; font-family: 'DM Sans', sans-serif; font-size: 11px;
+    color: var(--muted); background: none; border: none; cursor: pointer;
+    text-decoration: underline; padding: 0;
+  }
+  .share-qr-dl:hover { color: var(--accent); }
+  .share-link-label {
+    font-size: 11px; font-weight: 500; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px;
+  }
+  .share-link-row { display: flex; gap: 6px; margin-bottom: 1rem; }
+  .share-link-row input {
+    flex: 1; font-family: 'DM Sans', sans-serif; font-size: 12px;
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; background: var(--paper); color: var(--ink); min-width: 0;
+  }
+  .share-link-row input:focus { outline: none; border-color: var(--accent); }
+  .share-link-row button {
+    font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 500;
+    background: var(--ink); color: white; border: none;
+    border-radius: 8px; padding: 8px 12px; cursor: pointer; white-space: nowrap;
+  }
+  .share-open-head {
+    font-size: 12px; font-weight: 500; color: var(--ink); margin-bottom: 8px;
+  }
+  .share-open-head span { color: var(--muted); font-weight: 400; }
+  .share-open-list {
+    font-size: 12px; color: var(--ink); line-height: 1.55;
+    max-height: 120px; overflow-y: auto; margin-bottom: 1rem;
+    padding: 10px 12px; background: var(--paper); border-radius: 8px;
+    border: 1px solid var(--cream);
+  }
+  .share-open-list .empty { color: var(--muted); font-style: italic; }
+  .share-open-line { padding: 2px 0; }
+  .share-copy-announce {
+    width: 100%; font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 500;
+    background: var(--accent); color: white; border: none; border-radius: 8px;
+    padding: 11px 16px; cursor: pointer;
+  }
+  .share-copy-announce:hover { background: #a83314; }
+  .share-copy-announce:disabled { background: var(--border); cursor: not-allowed; }
 
   .toast {
     position: fixed; bottom: 1.5rem; right: 1.5rem;
@@ -166,18 +200,6 @@
     opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 100;
   }
   .toast.show { opacity: 1; }
-
-  .student-url-row { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
-  .student-url-row input {
-    flex: 1; font-family: 'DM Sans', sans-serif; font-size: 12px;
-    border: 1px solid var(--border); border-radius: 6px;
-    padding: 6px 8px; background: var(--paper); color: var(--muted);
-  }
-  .student-url-row button {
-    font-family: 'DM Sans', sans-serif; font-size: 12px;
-    background: var(--ink); color: white; border: none;
-    border-radius: 6px; padding: 6px 10px; cursor: pointer; white-space: nowrap;
-  }
 
   .bookings-section {
     margin-top: 1.25rem;
@@ -274,33 +296,32 @@
       <div id="previewSlots"><span class="empty-note">No slots added yet.</span></div>
     </div>
 
-    <div class="actions-box">
+    <div class="share-box">
       <div class="box-title"><span>Share with students</span></div>
 
-      <div class="hint">
-        Set your student page URL after you deploy. Students open <strong>index.html</strong> — they'll see only your open slots for the week.
-      </div>
+      <div class="share-layout">
+        <div class="share-qr-col">
+          <img id="shareQr" alt="QR code — scan to book a lesson" width="140" height="140">
+          <button type="button" class="share-qr-dl" onclick="downloadQR()">Download QR</button>
+        </div>
 
-      <div>
-        <div style="font-size:11px;font-weight:500;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.06em;">Student page URL</div>
-        <div class="student-url-row">
-          <input type="text" id="studentUrl" placeholder="https://yoursite.netlify.app/student.html">
-          <button onclick="saveUrl()">Save</button>
+        <div class="share-main-col">
+          <div class="share-link-label">Student booking page</div>
+          <div class="share-link-row">
+            <input type="url" id="studentUrl" placeholder="https://yoursite.com/index.html">
+            <button type="button" onclick="copyStudentLink()">Copy link</button>
+          </div>
+
+          <div class="share-open-head" id="shareOpenHead">Open slots to share</div>
+          <div class="share-open-list" id="shareOpenList">
+            <span class="empty">Add times above to build your announcement.</span>
+          </div>
+
+          <button type="button" class="share-copy-announce" id="copyAnnounceBtn" onclick="copyAnnouncement()">
+            Copy announcement message
+          </button>
         </div>
       </div>
-
-      <button class="action-btn primary" onclick="copyStudentLink()">
-        <span class="icon">🔗</span>
-        <span><span>Copy student link</span><br><span class="desc">Send this to students to sign up</span></span>
-      </button>
-      <button class="action-btn secondary" onclick="downloadQR()">
-        <span class="icon">⬛</span>
-        <span><span>Download QR code</span><br><span class="desc">Print or share for easy scanning</span></span>
-      </button>
-      <button class="action-btn secondary" onclick="copySlotText()">
-        <span class="icon">📋</span>
-        <span><span>Copy slots as text</span><br><span class="desc">Paste into a message or email</span></span>
-      </button>
     </div>
   </div>
 
@@ -418,6 +439,7 @@ function renderAll({ forceGrid = false } = {}) {
   renderPreview();
   renderBookings();
   renderPending();
+  renderSharePanel();
 }
 
 function getWeekKey() {
@@ -722,62 +744,138 @@ function renderPreview() {
       ${holder ? `<span class="p-student">${student ? '↻ ' : ''}${holder}</span>` : ''}`;
     container.appendChild(row);
   });
+  renderSharePanel();
+}
+
+function getOpenSlotsForShare() {
+  return getAllSlots().filter(({ day, time, student }) =>
+    isSlotOpenForWeek(day, time, { student })
+  );
+}
+
+function renderSharePanel() {
+  const url = getStudentUrl();
+  const qr = document.getElementById('shareQr');
+  if (qr && url) {
+    qr.src = `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(url)}`;
+  }
+
+  const wi = getWeekInfo();
+  const open = getOpenSlotsForShare();
+  const head = document.getElementById('shareOpenHead');
+  const list = document.getElementById('shareOpenList');
+  const btn = document.getElementById('copyAnnounceBtn');
+
+  if (head) {
+    const weekLabel = wi ? wi.label : 'This week';
+    head.innerHTML = `<strong>${open.length} open slot${open.length === 1 ? '' : 's'}</strong> <span>· ${weekLabel}</span>`;
+  }
+
+  if (list) {
+    if (!open.length) {
+      list.innerHTML = '<span class="empty">No open slots for this week — add times or pick another week.</span>';
+    } else {
+      list.innerHTML = open.map(({ day, time }) => {
+        let dateStr = '';
+        if (wi) {
+          const d = new Date(wi.mon);
+          d.setDate(d.getDate() + DAYS.indexOf(day));
+          dateStr = ` · ${fmt(d)}`;
+        }
+        return `<div class="share-open-line">${day.slice(0, 3)}${dateStr} · ${fmtTime(time)}–${fmtTime(addMins(time, 45))}</div>`;
+      }).join('');
+    }
+  }
+
+  if (btn) btn.disabled = !url;
+}
+
+function initShareUrl() {
+  const input = document.getElementById('studentUrl');
+  if (!input) return;
+  const defaultUrl = new URL('index.html', window.location.href).href;
+  input.value = localStorage.getItem('dance_student_url') || defaultUrl;
+  input.addEventListener('change', () => {
+    const v = input.value.trim();
+    if (v) localStorage.setItem('dance_student_url', v);
+    renderSharePanel();
+  });
 }
 
 function saveUrl() {
   const val = document.getElementById('studentUrl').value.trim();
-  if (val) { localStorage.setItem('dance_student_url', val); toast('URL saved!'); }
+  if (val) {
+    localStorage.setItem('dance_student_url', val);
+    renderSharePanel();
+    toast('Link saved');
+  }
 }
 window.saveUrl = saveUrl;
 
 function getStudentUrl() {
-  return localStorage.getItem('dance_student_url') || '';
+  const input = document.getElementById('studentUrl');
+  const val = input?.value?.trim();
+  if (val) return val;
+  const stored = localStorage.getItem('dance_student_url');
+  if (stored) return stored;
+  return new URL('index.html', window.location.href).href;
 }
 
 function copyStudentLink() {
   const url = getStudentUrl();
-  if (!url) { toast('Enter your student page URL first'); return; }
   navigator.clipboard.writeText(url).then(() => toast('Link copied!'));
 }
 window.copyStudentLink = copyStudentLink;
 
-function copySlotText() {
+function copyAnnouncement() {
   const wi = getWeekInfo();
-  const open = getAllSlots().filter(({ day, time, student }) => isSlotOpenForWeek(day, time, { student }));
-  if (!open.length) { toast('No open slots to copy'); return; }
-  const lines = open.map(({day, time}) => {
-    let dateStr = '';
-    if (wi) {
-      const d = new Date(wi.mon);
-      d.setDate(d.getDate() + DAYS.indexOf(day));
-      dateStr = ` (${fmt(d)})`;
-    }
-    return `${day}${dateStr} · ${fmtTime(time)}–${fmtTime(addMins(time,45))}`;
-  });
+  const open = getOpenSlotsForShare();
+  const url = getStudentUrl();
   const title = wi ? wi.label : 'Private Lessons';
-  navigator.clipboard.writeText(`Private Lesson Slots — ${title}\n\n${lines.join('\n')}\n\nSign up: ${getStudentUrl()}`).then(() => toast('Copied!'));
+
+  let message;
+  if (!open.length) {
+    message = `Private dance lessons — ${title}\n\nNo open slots this week. Check back soon!\n\nBook when slots open: ${url}`;
+  } else {
+    const lines = open.map(({ day, time }) => {
+      let dateStr = '';
+      if (wi) {
+        const d = new Date(wi.mon);
+        d.setDate(d.getDate() + DAYS.indexOf(day));
+        dateStr = ` (${fmt(d)})`;
+      }
+      return `• ${day}${dateStr} · ${fmtTime(time)}–${fmtTime(addMins(time, 45))}`;
+    });
+    message = `Private dance lessons — ${title}\n\nOpen times:\n${lines.join('\n')}\n\nBook here: ${url}`;
+  }
+
+  navigator.clipboard.writeText(message).then(() => toast('Announcement copied — paste into text, email, or group chat'));
 }
-window.copySlotText = copySlotText;
+window.copyAnnouncement = copyAnnouncement;
 
 function downloadQR() {
   const url = getStudentUrl();
-  if (!url) { toast('Enter your student page URL first'); return; }
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(url)}`;
   const a = document.createElement('a');
-  a.href = qrUrl; a.download = 'lesson-signup-qr.png'; a.target = '_blank';
+  a.href = qrUrl;
+  a.download = 'lesson-signup-qr.png';
+  a.target = '_blank';
   a.click();
+  toast('QR download started');
 }
 window.downloadQR = downloadQR;
 
 document.getElementById('weekStart').addEventListener('change', () => {
-  renderPreview(); renderBookings(); renderPending();
+  renderPreview();
+  renderBookings();
+  renderPending();
+  renderSharePanel();
 });
 
 const today = new Date();
 const mon = getMonday(today.toISOString().split('T')[0]);
 document.getElementById('weekStart').value = mon.toISOString().split('T')[0];
-const storedUrl = localStorage.getItem('dance_student_url');
-if (storedUrl) document.getElementById('studentUrl').value = storedUrl;
+initShareUrl();
 
 document.getElementById('dayGrid').addEventListener('click', (e) => {
   const btn = e.target.closest('.time-pick-btn');
@@ -810,6 +908,7 @@ subscribeSchedule(applyData, { onStatus: setSyncStatus, intervalMs: 20000 });
 
 lastSlotsJson = JSON.stringify(slots);
 renderGrid();
+renderSharePanel();
 </script>
 </body>
 </html>
