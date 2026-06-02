@@ -218,8 +218,7 @@
 <footer>Questions? Reach out to your instructor directly.</footer>
 
 <script type="module">
-import { db } from './firebase-config.js';
-import { doc, onSnapshot, setDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { loadSchedule, saveSchedule, subscribeSchedule } from './api-client.js';
 
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday'];
 
@@ -359,10 +358,7 @@ async function submitBooking() {
   }
 
   try {
-    await setDoc(doc(db, 'schedule', 'bookings'), bookings);
-    if (wantsRecurring) {
-      await setDoc(doc(db, 'schedule', 'pending'), { items: pendingRecurring });
-    }
+    await saveSchedule({ bookings, pending: pendingRecurring });
   } catch(e) {
     console.error('Booking error:', e);
     alert('Could not save your booking. Please try again.');
@@ -392,17 +388,14 @@ async function submitBooking() {
 }
 window.submitBooking = submitBooking;
 
-onSnapshot(doc(db, 'schedule', 'slots'), snap => {
-  slots = snap.exists() ? (snap.data() || {}) : {};
+function applyData(data) {
+  slots = data.slots || {};
+  bookings = data.bookings || {};
+  pendingRecurring = data.pending || [];
   render();
-});
-onSnapshot(doc(db, 'schedule', 'bookings'), snap => {
-  bookings = snap.exists() ? (snap.data() || {}) : {};
-  render();
-});
-onSnapshot(doc(db, 'schedule', 'pending'), snap => {
-  pendingRecurring = snap.exists() ? (snap.data().items || []) : [];
-});
+}
+
+subscribeSchedule(applyData);
 </script>
 </body>
 </html>

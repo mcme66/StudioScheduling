@@ -25,10 +25,6 @@ npm-debug.log*
 .env.local
 .env.*.local
 
-# Dependencies (if build tools are added later)
+# Dependencies
 node_modules/
 dist/
-
-# Note: firebase-config.js is intentionally NOT ignored.
-# Firebase web API keys are safe to commit — they identify the project
-# publicly. Security is enforced by Firestore Rules in the Firebase console.

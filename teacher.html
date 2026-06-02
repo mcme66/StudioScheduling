@@ -270,7 +270,7 @@
       <div class="box-title"><span>Share with students</span></div>
 
       <div class="hint">
-        Set your student page URL after you host the files. Students open <strong>student.html</strong> — they'll see only your open slots for the week.
+        Set your student page URL after you deploy. Students open <strong>index.html</strong> — they'll see only your open slots for the week.
       </div>
 
       <div>
@@ -317,8 +317,7 @@
 <div class="toast" id="toast"></div>
 
 <script type="module">
-import { db } from './firebase-config.js';
-import { doc, onSnapshot, setDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { saveSchedule, subscribeSchedule } from './api-client.js';
 
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday'];
 let slots = {Monday:[],Tuesday:[],Wednesday:[],Thursday:[],Friday:[]};
@@ -326,17 +325,17 @@ let bookings = {};
 let pendingRecurring = [];
 
 function save() {
-  setDoc(doc(db, 'schedule', 'slots'), slots)
+  saveSchedule({ slots })
     .catch(() => toast('Error saving — please try again'));
 }
 
 function saveBookings() {
-  setDoc(doc(db, 'schedule', 'bookings'), bookings)
+  saveSchedule({ bookings })
     .catch(() => toast('Error saving bookings'));
 }
 
 function savePending() {
-  setDoc(doc(db, 'schedule', 'pending'), { items: pendingRecurring })
+  saveSchedule({ pending: pendingRecurring })
     .catch(() => toast('Error saving pending requests'));
 }
 
@@ -683,18 +682,14 @@ document.getElementById('weekStart').value = mon.toISOString().split('T')[0];
 const storedUrl = localStorage.getItem('dance_student_url');
 if (storedUrl) document.getElementById('studentUrl').value = storedUrl;
 
-onSnapshot(doc(db, 'schedule', 'slots'), snap => {
-  slots = snap.exists() ? (snap.data() || {Monday:[],Tuesday:[],Wednesday:[],Thursday:[],Friday:[]}) : {Monday:[],Tuesday:[],Wednesday:[],Thursday:[],Friday:[]};
+function applyData(data) {
+  slots = data.slots || { Monday: [], Tuesday: [], Wednesday: [], Thursday: [], Friday: [] };
+  bookings = data.bookings || {};
+  pendingRecurring = data.pending || [];
   renderAll();
-});
-onSnapshot(doc(db, 'schedule', 'bookings'), snap => {
-  bookings = snap.exists() ? (snap.data() || {}) : {};
-  renderBookings();
-});
-onSnapshot(doc(db, 'schedule', 'pending'), snap => {
-  pendingRecurring = snap.exists() ? (snap.data().items || []) : [];
-  renderPending();
-});
+}
+
+subscribeSchedule(applyData);
 </script>
 </body>
 </html>
