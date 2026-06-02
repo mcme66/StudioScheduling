@@ -109,6 +109,13 @@
   .success-box h2 { font-family: 'DM Serif Display', serif; font-size: 1.4rem; font-weight: 400; color: var(--green); margin-bottom: .5rem; }
   .success-box p { font-size: 13px; color: var(--muted); line-height: 1.6; }
   .success-box .booked-detail { font-size: 14px; font-weight: 500; color: var(--green); margin: .75rem 0; }
+  .success-box .return-btn {
+    margin-top: 1.25rem; font-family: 'DM Sans', sans-serif; font-size: 14px; font-weight: 500;
+    background: var(--ink); color: white; border: none; border-radius: 8px;
+    padding: 10px 20px; cursor: pointer;
+  }
+  .success-box .return-btn:hover { background: #333; }
+  .slot-booked-name.recurring { font-style: italic; }
 
   .no-slots { text-align: center; padding: 2.5rem 1rem; color: var(--muted); }
   .no-slots .icon { font-size: 2rem; margin-bottom: .75rem; }
@@ -187,6 +194,7 @@
     <div class="success-recurring" id="successRecurring">
       ↻ Weekly spot requested — your instructor will confirm once approved.
     </div>
+    <button type="button" class="return-btn" onclick="returnToBooking()">Book another slot</button>
   </div>
 
   <div id="slotsList" class="slots-list"></div>
@@ -258,16 +266,26 @@ function getWeekKey() {
   return mon.toISOString().split('T')[0];
 }
 
-function getBooking(day, time) {
-  const wk = getWeekKey();
-  return bookings[`${wk}-${day}-${time}`] || null;
+function getRecurringStudent(day, time) {
+  const s = (slots[day] || []).find(x => x.time === time);
+  return s?.student || null;
 }
 
-function getOpenSlots() {
+/** Who holds this slot this week: weekly student and/or one-off booking. */
+function getSlotHolder(day, time) {
+  const recurring = getRecurringStudent(day, time);
+  if (recurring) return { name: recurring, recurring: true };
+  const wk = getWeekKey();
+  const booking = bookings[`${wk}-${day}-${time}`];
+  if (booking) return { name: booking.name, recurring: false };
+  return null;
+}
+
+function getAllDisplaySlots() {
   const all = [];
   DAYS.forEach(day => {
-    [...(slots[day]||[])].sort((a,b) => a.time.localeCompare(b.time)).forEach(s => {
-      if (!s.student) all.push({day, time: s.time});
+    [...(slots[day] || [])].sort((a, b) => a.time.localeCompare(b.time)).forEach(s => {
+      all.push({ day, time: s.time });
     });
   });
   return all;
@@ -283,7 +301,7 @@ function toggleRecurring() {
 window.toggleRecurring = toggleRecurring;
 
 function render() {
-  const open = getOpenSlots();
+  const displaySlots = getAllDisplaySlots();
   const today = new Date();
   const mon = getMonday(today.toISOString().split('T')[0]);
   const fri = new Date(mon); fri.setDate(fri.getDate()+4);
@@ -296,24 +314,29 @@ function render() {
 
   const successShowing = document.getElementById('successBox').style.display === 'block';
 
-  if (!open.length) {
+  if (!displaySlots.length) {
     container.innerHTML = `<div class="no-slots"><div class="icon">📅</div><p>No open slots this week.<br>Check back soon or contact your instructor directly.</p></div>`;
     if (!successShowing) document.getElementById('submitBtn').style.display = 'none';
     return;
   }
 
+  const hasOpen = displaySlots.some(({ day, time }) => !getSlotHolder(day, time));
   if (!successShowing) {
-    document.getElementById('submitBtn').style.display = '';
+    document.getElementById('submitBtn').style.display = hasOpen ? '' : 'none';
   }
 
-  open.forEach(({day, time}) => {
-    const booking = getBooking(day, time);
-    const taken = !!booking;
+  displaySlots.forEach(({ day, time }) => {
+    const holder = getSlotHolder(day, time);
+    const taken = !!holder;
     const d = new Date(mon);
     d.setDate(d.getDate() + DAYS.indexOf(day));
     const card = document.createElement('div');
     card.className = `slot-card${taken ? ' taken' : ''}`;
     card.dataset.slot = `${day}-${time}`;
+    const nameClass = holder?.recurring ? 'slot-booked-name recurring' : 'slot-booked-name';
+    const nameLabel = holder
+      ? (holder.recurring ? `${holder.name} · weekly` : holder.name)
+      : '';
     card.innerHTML = `
       <div class="slot-dot"></div>
       <div class="slot-info">
@@ -321,7 +344,7 @@ function render() {
         <div class="slot-time">${fmtTime(time)} – ${fmtTime(addMins(time,45))}</div>
         <div class="slot-date">${fmt(d)}</div>
       </div>
-      ${taken ? `<div class="slot-booked-name">${booking.name}</div>` : ''}`;
+      ${taken ? `<div class="${nameClass}">${nameLabel}</div>` : ''}`;
     if (!taken) {
       card.addEventListener('click', () => selectSlot(day, time, card));
     }
@@ -348,11 +371,21 @@ async function submitBooking() {
   if (!name || !contact) { alert('Please fill in your name and contact info.'); return; }
   if (!selectedSlot) return;
 
+  const { day, time } = selectedSlot;
+  if (getRecurringStudent(day, time)) {
+    alert('This time is reserved for a weekly student.');
+    return;
+  }
+  if (getSlotHolder(day, time)) {
+    alert('This slot was just booked. Please choose another time.');
+    render();
+    return;
+  }
+
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
   btn.textContent = 'Saving…';
 
-  const {day, time} = selectedSlot;
   const wk = getWeekKey();
   bookings[`${wk}-${day}-${time}`] = {name, contact, bookedAt: new Date().toISOString(), recurringRequested: wantsRecurring};
 
@@ -393,6 +426,11 @@ async function submitBooking() {
   render();
 }
 window.submitBooking = submitBooking;
+
+function returnToBooking() {
+  location.reload();
+}
+window.returnToBooking = returnToBooking;
 
 function applyData(data) {
   slots = data.slots || {};

@@ -462,24 +462,48 @@ function declineRecurring(idx) {
 }
 window.declineRecurring = declineRecurring;
 
-function renderBookings() {
+function getWeekBookingsList() {
   const wk = getWeekKey();
-  const wi = getWeekInfo();
-  const container = document.getElementById('bookingsList');
+  if (!wk) return [];
 
   const weekBookings = Object.entries(bookings)
-    .filter(([key]) => wk && key.startsWith(wk))
+    .filter(([key]) => key.startsWith(wk))
     .map(([key, val]) => {
-      const rest = key.slice(wk.length + 1); // "Day-HH:MM" e.g. "Monday-10:00"
+      const rest = key.slice(wk.length + 1);
       const dashIdx = rest.lastIndexOf('-');
       const day = rest.slice(0, dashIdx);
       const time = rest.slice(dashIdx + 1);
-      return { day, time, ...val, key };
-    })
-    .sort((a,b) => {
-      const di = DAYS.indexOf(a.day) - DAYS.indexOf(b.day);
-      return di !== 0 ? di : a.time.localeCompare(b.time);
+      return { day, time, ...val, key, isRecurringSlot: false };
     });
+
+  const bookedKeys = new Set(weekBookings.map(b => `${b.day}-${b.time}`));
+
+  DAYS.forEach(day => {
+    (slots[day] || []).forEach(s => {
+      if (!s.student) return;
+      const slotKey = `${day}-${s.time}`;
+      if (bookedKeys.has(slotKey)) return;
+      weekBookings.push({
+        day,
+        time: s.time,
+        name: s.student,
+        contact: '',
+        key: null,
+        isRecurringSlot: true
+      });
+    });
+  });
+
+  return weekBookings.sort((a, b) => {
+    const di = DAYS.indexOf(a.day) - DAYS.indexOf(b.day);
+    return di !== 0 ? di : a.time.localeCompare(b.time);
+  });
+}
+
+function renderBookings() {
+  const wi = getWeekInfo();
+  const container = document.getElementById('bookingsList');
+  const weekBookings = getWeekBookingsList();
 
   document.getElementById('statBookings').textContent = `${weekBookings.length} booked`;
 
@@ -489,14 +513,16 @@ function renderBookings() {
   }
 
   container.innerHTML = '';
-  weekBookings.forEach(({day, time, name, contact, bookedAt, recurringRequested, key}) => {
+  weekBookings.forEach(({ day, time, name, contact, bookedAt, recurringRequested, key, isRecurringSlot }) => {
     let dateStr = '';
     if (wi) {
       const d = new Date(wi.mon);
       d.setDate(d.getDate() + DAYS.indexOf(day));
       dateStr = fmt(d);
     }
-    const bookedTime = bookedAt ? new Date(bookedAt).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
+    const bookedTime = bookedAt
+      ? new Date(bookedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+      : '';
     const row = document.createElement('div');
     row.className = 'booking-row';
     row.innerHTML = `
@@ -505,10 +531,11 @@ function renderBookings() {
         <div>${fmtTime(time)}–${fmtTime(addMins(time,45))}</div>
       </div>
       <div class="b-name">${name}</div>
-      <div class="b-contact">${contact}</div>
-      ${recurringRequested ? `<span class="b-recurring-badge">↻ Weekly requested</span>` : ''}
+      <div class="b-contact">${contact || (isRecurringSlot ? '—' : '')}</div>
+      ${isRecurringSlot ? `<span class="b-recurring-badge">↻ Weekly spot</span>` : ''}
+      ${!isRecurringSlot && recurringRequested ? `<span class="b-recurring-badge">↻ Weekly requested</span>` : ''}
       ${bookedTime ? `<div class="b-time">Booked ${bookedTime}</div>` : ''}
-      <button class="b-cancel" onclick="cancelBooking('${key}')">Cancel</button>`;
+      ${!isRecurringSlot && key ? `<button class="b-cancel" onclick="cancelBooking('${key}')">Cancel</button>` : ''}`;
     container.appendChild(row);
   });
 }
@@ -628,11 +655,18 @@ function getAllSlots() {
   return all;
 }
 
+function isSlotOpenForWeek(day, time, slot) {
+  if (slot.student) return false;
+  const wk = getWeekKey();
+  if (wk && bookings[`${wk}-${day}-${time}`]) return false;
+  return true;
+}
+
 function renderPreview() {
   const wi = getWeekInfo();
   const all = getAllSlots();
-  const open = all.filter(x => !x.student);
-  const taken = all.filter(x => x.student);
+  const open = all.filter(({ day, time, student }) => isSlotOpenForWeek(day, time, { student }));
+  const taken = all.filter(({ day, time, student }) => !isSlotOpenForWeek(day, time, { student }));
   document.getElementById('statOpen').textContent = `${open.length} open`;
   document.getElementById('statTaken').textContent = `${taken.length} recurring`;
   document.getElementById('weekLabel').textContent = wi ? wi.label : '';
@@ -640,18 +674,22 @@ function renderPreview() {
   const container = document.getElementById('previewSlots');
   if (!all.length) { container.innerHTML = '<span class="empty-note">No slots added yet.</span>'; return; }
   container.innerHTML = '';
-  all.forEach(({day, time, student}) => {
+  all.forEach(({ day, time, student }) => {
     let dateStr = '';
     if (wi) {
       const d = new Date(wi.mon);
       d.setDate(d.getDate() + DAYS.indexOf(day));
       dateStr = ` · ${fmt(d)}`;
     }
+    const wk = getWeekKey();
+    const weekBooking = wk ? bookings[`${wk}-${day}-${time}`] : null;
+    const open = isSlotOpenForWeek(day, time, { student });
+    const holder = student || weekBooking?.name;
     const row = document.createElement('div');
     row.className = 'preview-slot';
-    row.innerHTML = `<span class="p-badge ${student?'taken':'open'}">${day.slice(0,3)}</span>
+    row.innerHTML = `<span class="p-badge ${open ? 'open' : 'taken'}">${day.slice(0,3)}</span>
       <span>${fmtTime(time)}${dateStr}</span>
-      ${student ? `<span class="p-student">↻ ${student}</span>` : ''}`;
+      ${holder ? `<span class="p-student">${student ? '↻ ' : ''}${holder}</span>` : ''}`;
     container.appendChild(row);
   });
 }
@@ -675,7 +713,7 @@ window.copyStudentLink = copyStudentLink;
 
 function copySlotText() {
   const wi = getWeekInfo();
-  const open = getAllSlots().filter(x => !x.student);
+  const open = getAllSlots().filter(({ day, time, student }) => isSlotOpenForWeek(day, time, { student }));
   if (!open.length) { toast('No open slots to copy'); return; }
   const lines = open.map(({day, time}) => {
     let dateStr = '';
