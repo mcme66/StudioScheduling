@@ -91,18 +91,20 @@
   }
   .assign-form button:hover { background: #235a42; }
 
-  .add-row { display: flex; gap: 5px; margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--cream); }
-  .add-row input[type=time] {
-    flex: 1; font-family: 'DM Sans', sans-serif; font-size: 11px;
-    border: 1px solid var(--border); border-radius: 6px; padding: 5px 6px;
-    background: var(--paper); min-width: 0;
+  .add-row { display: flex; gap: 6px; margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--cream); }
+  .add-row select.time-select {
+    flex: 1; font-family: 'DM Sans', sans-serif; font-size: 12px;
+    border: 1px solid var(--border); border-radius: 6px; padding: 7px 8px;
+    background: var(--white); min-width: 0; cursor: pointer; color: var(--ink);
   }
+  .add-row select.time-select:focus { outline: none; border-color: var(--accent); }
   .add-row button {
+    font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 500;
     background: var(--ink); color: white; border: none; border-radius: 6px;
-    padding: 5px 8px; cursor: pointer; font-size: 14px; line-height: 1;
-    flex-shrink: 0;
+    padding: 7px 12px; cursor: pointer; flex-shrink: 0;
   }
   .add-row button:hover { background: #333; }
+  .add-row button:disabled { background: var(--border); cursor: not-allowed; }
 
   .bottom { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
 
@@ -321,6 +323,17 @@
 import { saveSchedule, subscribeSchedule } from './api-client.js';
 
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday'];
+
+const TIME_OPTIONS = (() => {
+  const list = [];
+  for (let h = 7; h <= 20; h++) {
+    for (const m of [0, 15, 30, 45]) {
+      list.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+    }
+  }
+  return list;
+})();
+
 let slots = {Monday:[],Tuesday:[],Wednesday:[],Thursday:[],Friday:[]};
 let bookings = {};
 let pendingRecurring = [];
@@ -537,12 +550,21 @@ function renderGrid() {
       </div>`;
     }).join('');
 
+    const used = new Set(sorted.map(s => s.time));
+    const available = TIME_OPTIONS.filter(t => !used.has(t));
+    const timeOpts = available
+      .map(t => `<option value="${t}">${fmtTime(t)}</option>`)
+      .join('');
+
     col.innerHTML = `
       <div class="day-head">${day.slice(0,3)}</div>
-      <div class="slot-list">${chipsHtml || '<span style="font-size:11px;color:var(--muted)">—</span>'}</div>
+      <div class="slot-list">${chipsHtml || '<span style="font-size:11px;color:var(--muted)">No slots yet</span>'}</div>
       <div class="add-row">
-        <input type="time" id="ti-${day}" step="900">
-        <button onclick="addSlot('${day}')">+</button>
+        <select class="time-select" id="ti-${day}" aria-label="Add time on ${day}">
+          <option value="">${available.length ? 'Choose time…' : 'All times added'}</option>
+          ${timeOpts}
+        </select>
+        <button type="button" onclick="addSlot('${day}')" ${available.length ? '' : 'disabled'}>Add</button>
       </div>`;
     grid.appendChild(col);
   });
@@ -573,15 +595,21 @@ function clearStudent(day, time) {
 window.clearStudent = clearStudent;
 
 function addSlot(day) {
-  const inp = document.getElementById('ti-'+day);
-  const val = inp.value;
-  if (!val) return;
-  if (!slots[day]) slots[day] = [];
-  if (!slots[day].find(x => x.time === val)) {
-    slots[day].push({time: val});
-    save(); renderAll();
+  const sel = document.getElementById('ti-' + day);
+  const val = sel?.value;
+  if (!val) {
+    toast('Choose a time from the list');
+    return;
   }
-  inp.value = '';
+  if (!slots[day]) slots[day] = [];
+  if (slots[day].find(x => x.time === val)) {
+    toast('That time is already on ' + day);
+    return;
+  }
+  slots[day].push({ time: val });
+  save();
+  renderAll();
+  toast(`Added ${day} ${fmtTime(val)}`);
 }
 window.addSlot = addSlot;
 

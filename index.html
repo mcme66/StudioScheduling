@@ -66,7 +66,11 @@
   .slot-day { font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
   .slot-time { font-size: 15px; font-weight: 500; color: var(--ink); margin-top: 1px; }
   .slot-date { font-size: 12px; color: var(--muted); margin-top: 1px; }
-  .slot-taken-label { font-size: 11px; color: var(--muted); font-style: italic; }
+  .slot-booked-name {
+    font-size: 13px; font-weight: 500; color: var(--green);
+    white-space: nowrap; flex-shrink: 0;
+  }
+  .slot-card.taken .slot-booked-name { color: var(--muted); }
 
   .form-box {
     background: var(--white); border: 1px solid var(--border);
@@ -254,9 +258,9 @@ function getWeekKey() {
   return mon.toISOString().split('T')[0];
 }
 
-function isBooked(day, time) {
+function getBooking(day, time) {
   const wk = getWeekKey();
-  return bookings[`${wk}-${day}-${time}`];
+  return bookings[`${wk}-${day}-${time}`] || null;
 }
 
 function getOpenSlots() {
@@ -303,7 +307,8 @@ function render() {
   }
 
   open.forEach(({day, time}) => {
-    const taken = isBooked(day, time);
+    const booking = getBooking(day, time);
+    const taken = !!booking;
     const d = new Date(mon);
     d.setDate(d.getDate() + DAYS.indexOf(day));
     const card = document.createElement('div');
@@ -316,7 +321,7 @@ function render() {
         <div class="slot-time">${fmtTime(time)} – ${fmtTime(addMins(time,45))}</div>
         <div class="slot-date">${fmt(d)}</div>
       </div>
-      ${taken ? `<div class="slot-taken-label">Taken</div>` : ''}`;
+      ${taken ? `<div class="slot-booked-name">${booking.name}</div>` : ''}`;
     if (!taken) {
       card.addEventListener('click', () => selectSlot(day, time, card));
     }
