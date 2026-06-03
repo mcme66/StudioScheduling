@@ -1,9 +1,8 @@
 const express = require('express');
-const fs = require('fs');
 const path = require('path');
+const { storageMode, readRaw, writeRaw } = require('./storage');
 
 const ROOT = __dirname;
-const DATA_FILE = path.join(ROOT, 'data', 'schedule.json');
 const PORT = process.env.PORT || 3000;
 
 const DEFAULT = {
@@ -25,11 +24,11 @@ function oneMonthAgo() {
 }
 
 function normalize(data) {
-  const slots = { ...DEFAULT.slots, ...(data.slots || {}) };
+  const slots = { ...DEFAULT.slots, ...(data?.slots || {}) };
   return {
     slots,
-    bookings: data.bookings && typeof data.bookings === 'object' ? data.bookings : {},
-    pending: Array.isArray(data.pending) ? data.pending : []
+    bookings: data?.bookings && typeof data.bookings === 'object' ? data.bookings : {},
+    pending: Array.isArray(data?.pending) ? data.pending : []
   };
 }
 
@@ -61,20 +60,15 @@ function prune(data) {
   return { slots: data.slots, bookings, pending };
 }
 
-function readData() {
-  try {
-    const raw = fs.readFileSync(DATA_FILE, 'utf8');
-    return normalize(JSON.parse(raw));
-  } catch {
-    return normalize(DEFAULT);
-  }
+async function readData() {
+  const raw = await readRaw();
+  return normalize(raw || DEFAULT);
 }
 
-function writeData(data) {
+async function writeData(data) {
   const normalized = normalize(data);
   const pruned = prune(normalized);
-  fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-  fs.writeFileSync(DATA_FILE, JSON.stringify(pruned, null, 2) + '\n', 'utf8');
+  await writeRaw(pruned);
   return pruned;
 }
 
@@ -82,38 +76,52 @@ const app = express();
 app.use(express.json({ limit: '256kb' }));
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true });
+  res.json({ ok: true, storage: storageMode() });
 });
 
 app.get('/', (_req, res) => {
   res.redirect('/index.html');
 });
 
-app.get('/api/schedule', (_req, res) => {
-  const current = readData();
-  const pruned = prune(current);
-  const changed =
-    JSON.stringify(pruned.bookings) !== JSON.stringify(current.bookings) ||
-    JSON.stringify(pruned.pending) !== JSON.stringify(current.pending);
-  res.json(changed ? writeData(pruned) : pruned);
+app.get('/api/schedule', async (_req, res) => {
+  try {
+    const current = await readData();
+    const pruned = prune(current);
+    const changed =
+      JSON.stringify(pruned.bookings) !== JSON.stringify(current.bookings) ||
+      JSON.stringify(pruned.pending) !== JSON.stringify(current.pending);
+    res.json(changed ? await writeData(pruned) : pruned);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Could not load schedule' });
+  }
 });
 
-app.put('/api/schedule', (req, res) => {
-  const current = readData();
-  const body = req.body || {};
-  const merged = normalize({
-    slots: body.slots !== undefined ? body.slots : current.slots,
-    bookings: body.bookings !== undefined ? body.bookings : current.bookings,
-    pending: body.pending !== undefined ? body.pending : current.pending
-  });
-  res.json(writeData(merged));
+app.put('/api/schedule', async (req, res) => {
+  try {
+    const current = await readData();
+    const body = req.body || {};
+    const merged = normalize({
+      slots: body.slots !== undefined ? body.slots : current.slots,
+      bookings: body.bookings !== undefined ? body.bookings : current.bookings,
+      pending: body.pending !== undefined ? body.pending : current.pending
+    });
+    res.json(await writeData(merged));
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Could not save schedule' });
+  }
 });
 
 app.use(express.static(ROOT));
 
 app.listen(PORT, '0.0.0.0', () => {
+  const mode = storageMode();
   console.log(`Lesson scheduler running on port ${PORT}`);
+  console.log(`  Storage:       ${mode}${mode === 'file' ? ' (set SUPABASE_* env on Render for persistence)' : ''}`);
   console.log(`  Student page:  http://localhost:${PORT}/index.html`);
   console.log(`  Teacher page:  http://localhost:${PORT}/teacher.html`);
-  console.log(`  Database file: data/schedule.json`);
+  if (mode === 'file') {
+    console.log('  See SUPABASE_SETUP.md to configure the database.');
+  }
 });
