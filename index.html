@@ -88,7 +88,29 @@
   .week-nav-text { flex: 1; text-align: center; min-width: 0; line-height: 1.4; }
   .week-banner strong { color: var(--ink); }
 
-  .slots-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 2rem; }
+  .slots-list { display: flex; flex-direction: column; gap: 0; margin-bottom: 2rem; }
+
+  .day-group {
+    margin-bottom: 1.5rem;
+    padding-bottom: 1.25rem;
+    border-bottom: 2px solid var(--cream);
+  }
+  .day-group:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+  .day-group-head {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+    margin-bottom: 10px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .day-group-name {
+    font-size: 13px; font-weight: 500; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--ink);
+  }
+  .day-group-date { font-size: 12px; color: var(--muted); }
+  .day-group-empty {
+    font-size: 13px; color: var(--muted); font-style: italic;
+    padding: 10px 12px; background: var(--cream); border-radius: 8px;
+  }
+  .day-group-slots { display: flex; flex-direction: column; gap: 8px; }
 
   .slot-card {
     background: var(--white); border: 1px solid var(--border);
@@ -110,9 +132,8 @@
   .slot-card.taken .slot-dot { background: var(--border); }
 
   .slot-info { flex: 1; }
-  .slot-day { font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
-  .slot-time { font-size: 15px; font-weight: 500; color: var(--ink); margin-top: 1px; }
-  .slot-date { font-size: 12px; color: var(--muted); margin-top: 1px; }
+  .slot-time { font-size: 15px; font-weight: 500; color: var(--ink); }
+  .slot-duration { font-size: 12px; color: var(--muted); margin-top: 2px; }
   .slot-booked-name {
     font-size: 13px; font-weight: 500; color: var(--green);
     white-space: nowrap; flex-shrink: 0;
@@ -369,14 +390,15 @@ function getSlotHolder(day, time) {
   return null;
 }
 
-function getAllDisplaySlots() {
-  const all = [];
-  DAYS.forEach(day => {
-    [...(slots[day] || [])].sort((a, b) => a.time.localeCompare(b.time)).forEach(s => {
-      all.push({ day, time: s.time });
-    });
-  });
-  return all;
+function getSlotsByDay() {
+  return DAYS.map(day => ({
+    day,
+    slots: [...(slots[day] || [])].sort((a, b) => a.time.localeCompare(b.time))
+  }));
+}
+
+function getTotalSlotCount() {
+  return DAYS.reduce((n, day) => n + (slots[day] || []).length, 0);
 }
 
 function toggleRecurring() {
@@ -388,8 +410,30 @@ function toggleRecurring() {
 }
 window.toggleRecurring = toggleRecurring;
 
+function createSlotCard(day, time, mon) {
+  const holder = getSlotHolder(day, time);
+  const taken = !!holder;
+  const card = document.createElement('div');
+  card.className = `slot-card${taken ? ' taken' : ''}`;
+  card.dataset.slot = `${day}-${time}`;
+  const nameClass = holder?.recurring ? 'slot-booked-name recurring' : 'slot-booked-name';
+  const nameLabel = holder
+    ? (holder.recurring ? `${holder.name} · weekly` : holder.name)
+    : '';
+  card.innerHTML = `
+    <div class="slot-dot"></div>
+    <div class="slot-info">
+      <div class="slot-time">${fmtTime(time)} – ${fmtTime(addMins(time, 45))}</div>
+      <div class="slot-duration">45 min private lesson</div>
+    </div>
+    ${taken ? `<div class="${nameClass}">${nameLabel}</div>` : ''}`;
+  if (!taken) {
+    card.addEventListener('click', () => selectSlot(day, time, card));
+  }
+  return card;
+}
+
 function render() {
-  const displaySlots = getAllDisplaySlots();
   const mon = getViewMonday();
   const fri = new Date(mon);
   fri.setDate(fri.getDate() + 4);
@@ -404,42 +448,48 @@ function render() {
 
   const successShowing = document.getElementById('successBox').style.display === 'block';
 
-  if (!displaySlots.length) {
-    container.innerHTML = `<div class="no-slots"><div class="icon">📅</div><p>No open slots this week.<br>Check back soon or contact your instructor directly.</p></div>`;
+  if (!getTotalSlotCount()) {
+    container.innerHTML = `<div class="no-slots"><div class="icon">📅</div><p>No lessons scheduled this week.<br>Check back soon or contact your instructor directly.</p></div>`;
     if (!successShowing) document.getElementById('submitBtn').style.display = 'none';
     return;
   }
 
-  const hasOpen = displaySlots.some(({ day, time }) => !getSlotHolder(day, time));
+  let hasOpen = false;
+  getSlotsByDay().forEach(({ day, slots: daySlots }) => {
+    const d = new Date(mon);
+    d.setDate(d.getDate() + DAYS.indexOf(day));
+
+    const group = document.createElement('section');
+    group.className = 'day-group';
+
+    const head = document.createElement('div');
+    head.className = 'day-group-head';
+    head.innerHTML = `
+      <span class="day-group-name">${day}</span>
+      <span class="day-group-date">${fmt(d)}</span>`;
+    group.appendChild(head);
+
+    if (!daySlots.length) {
+      const empty = document.createElement('p');
+      empty.className = 'day-group-empty';
+      empty.textContent = 'No lessons this day';
+      group.appendChild(empty);
+    } else {
+      const list = document.createElement('div');
+      list.className = 'day-group-slots';
+      daySlots.forEach(({ time }) => {
+        if (!getSlotHolder(day, time)) hasOpen = true;
+        list.appendChild(createSlotCard(day, time, mon));
+      });
+      group.appendChild(list);
+    }
+
+    container.appendChild(group);
+  });
+
   if (!successShowing) {
     document.getElementById('submitBtn').style.display = hasOpen ? '' : 'none';
   }
-
-  displaySlots.forEach(({ day, time }) => {
-    const holder = getSlotHolder(day, time);
-    const taken = !!holder;
-    const d = new Date(mon);
-    d.setDate(d.getDate() + DAYS.indexOf(day));
-    const card = document.createElement('div');
-    card.className = `slot-card${taken ? ' taken' : ''}`;
-    card.dataset.slot = `${day}-${time}`;
-    const nameClass = holder?.recurring ? 'slot-booked-name recurring' : 'slot-booked-name';
-    const nameLabel = holder
-      ? (holder.recurring ? `${holder.name} · weekly` : holder.name)
-      : '';
-    card.innerHTML = `
-      <div class="slot-dot"></div>
-      <div class="slot-info">
-        <div class="slot-day">${day}</div>
-        <div class="slot-time">${fmtTime(time)} – ${fmtTime(addMins(time,45))}</div>
-        <div class="slot-date">${fmt(d)}</div>
-      </div>
-      ${taken ? `<div class="${nameClass}">${nameLabel}</div>` : ''}`;
-    if (!taken) {
-      card.addEventListener('click', () => selectSlot(day, time, card));
-    }
-    container.appendChild(card);
-  });
 }
 
 function selectSlot(day, time, card) {
