@@ -2,14 +2,19 @@
   "name": "lesson-scheduling",
   "version": "1.0.0",
   "private": true,
+  "description": "Convenience scripts for running the Lesson Scheduling PERN app locally without Docker.",
   "scripts": {
-    "start": "node server.js"
+    "setup": "npm install && npm install --prefix server && npm install --prefix client",
+    "install:server": "npm install --prefix server",
+    "install:client": "npm install --prefix client",
+    "migrate": "cd server && npm run migrate:up",
+    "seed": "cd server && npm run seed",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "dev": "concurrently -k -n api,web -c blue,magenta \"npm run dev:server\" \"npm run dev:client\"",
+    "build": "cd client && npm run build"
   },
-  "engines": {
-    "node": ">=18"
-  },
-  "dependencies": {
-    "@supabase/supabase-js": "^2.49.1",
-    "express": "^4.21.2"
+  "devDependencies": {
+    "concurrently": "^9.1.2"
   }
 }
