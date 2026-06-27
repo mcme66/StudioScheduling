@@ -45,10 +45,6 @@ export default function StudioDetail() {
 
   return (
     <div className="container">
-      <Link to="/" className="muted" style={{ fontSize: '13px' }}>
-        ← All studios
-      </Link>
-
       {isLoading && <div className="loading">Loading studio…</div>}
       {isError && <p className="error-text">{error.message}</p>}
 
