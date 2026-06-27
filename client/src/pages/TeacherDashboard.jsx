@@ -4,6 +4,7 @@ import { api } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useToast } from '../components/Toast.jsx';
 import SharePanel from '../components/SharePanel.jsx';
+import PaidToggle from '../components/PaidToggle.jsx';
 import {
   WEEKDAYS,
   fmtTime,
@@ -90,6 +91,12 @@ export default function TeacherDashboard() {
       toast('Booking cancelled.');
       invalidateAll();
     },
+    onError: (err) => toast(err.message),
+  });
+
+  const paidMutation = useMutation({
+    mutationFn: ({ id, paid }) => api(`/bookings/${id}/paid`, { method: 'PATCH', body: { paid } }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['teacher-bookings'] }),
     onError: (err) => toast(err.message),
   });
 
@@ -190,9 +197,16 @@ export default function TeacherDashboard() {
         <div className="section-title">Bookings · week of {weekRangeLabel(weekStart)}</div>
         {bookingsQuery.isLoading && <div className="loading">Loading…</div>}
         {bookingsQuery.data && (
-          <BookingsList data={bookingsQuery.data} onCancel={(id) => {
-            if (window.confirm('Cancel this booking? The slot will reopen.')) cancelBooking.mutate(id);
-          }} cancelPending={cancelBooking.isPending} />
+          <BookingsList
+            data={bookingsQuery.data}
+            trackPayments={bookingsQuery.data.trackPayments}
+            onCancel={(id) => {
+              if (window.confirm('Cancel this booking? The slot will reopen.')) cancelBooking.mutate(id);
+            }}
+            onPaidChange={(id, paid) => paidMutation.mutate({ id, paid })}
+            cancelPending={cancelBooking.isPending}
+            paidPending={paidMutation.isPending}
+          />
         )}
       </div>
 
@@ -259,7 +273,7 @@ export default function TeacherDashboard() {
   );
 }
 
-function BookingsList({ data, onCancel, cancelPending }) {
+function BookingsList({ data, trackPayments, onCancel, onPaidChange, cancelPending, paidPending }) {
   const { bookings, recurring } = data;
   if (!bookings.length && !recurring.length) {
     return <p className="muted" style={{ fontSize: '14px' }}>No bookings for this week yet.</p>;
@@ -289,14 +303,23 @@ function BookingsList({ data, onCancel, cancelPending }) {
             {b.student.name}
             <div className="contact">{b.student.email}{b.student.phone ? ` · ${b.student.phone}` : ''}</div>
           </div>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() => onCancel(b.id)}
-            disabled={cancelPending}
-          >
-            Cancel
-          </button>
+          <div className="row" style={{ gap: '0.4rem' }}>
+            {trackPayments && (
+              <PaidToggle
+                paid={b.paid}
+                disabled={paidPending}
+                onChange={(paid) => onPaidChange(b.id, paid)}
+              />
+            )}
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => onCancel(b.id)}
+              disabled={cancelPending}
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       ))}
     </>

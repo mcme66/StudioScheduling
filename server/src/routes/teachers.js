@@ -22,6 +22,7 @@ const profileSchema = z.object({
   defaultDurationMin: z.number().int().min(5).max(240).optional(),
   additionalInfo: z.string().max(15000).optional().or(z.literal('')),
   teachingPolicies: z.string().max(15000).optional().or(z.literal('')),
+  trackPayments: z.boolean().optional(),
 });
 
 function mapTeacherProfile(row) {
@@ -35,6 +36,7 @@ function mapTeacherProfile(row) {
     defaultDurationMin: row.default_duration_min,
     additionalInfo: row.additional_info || null,
     teachingPolicies: row.teaching_policies || null,
+    trackPayments: row.track_payments === true,
   };
 }
 
@@ -98,6 +100,7 @@ teachersRouter.patch(
       defaultDurationMin: 'default_duration_min',
       additionalInfo: 'additional_info',
       teachingPolicies: 'teaching_policies',
+      trackPayments: 'track_payments',
     };
     const richTextKeys = new Set(['additionalInfo', 'teachingPolicies']);
     const fields = [];
@@ -138,7 +141,7 @@ teachersRouter.get(
     }
 
     const { rows: bookings } = await query(
-      `SELECT b.id, b.lesson_date, b.created_at, b.status,
+      `SELECT b.id, b.lesson_date, b.created_at, b.status, b.paid,
               s.weekday, s.start_time, s.duration_min, s.price_cents,
               st.full_name AS student_name, st.email AS student_email, st.phone AS student_phone
          FROM bookings b
@@ -166,7 +169,14 @@ teachersRouter.get(
       [req.user.id],
     );
 
+    const { rows: teacherRows } = await query(
+      'SELECT track_payments FROM teachers WHERE id = $1',
+      [req.user.id],
+    );
+    const trackPayments = teacherRows[0]?.track_payments === true;
+
     res.json({
+      trackPayments,
       bookings: bookings.map((b) => ({
         id: b.id,
         lessonDate: fmtDate(b.lesson_date),
@@ -175,6 +185,7 @@ teachersRouter.get(
         startTime: fmtTime(b.start_time),
         durationMin: b.duration_min,
         priceCents: b.price_cents,
+        paid: b.paid === true,
         student: { name: b.student_name, email: b.student_email, phone: b.student_phone },
       })),
       recurring: recurring.map((r) => ({

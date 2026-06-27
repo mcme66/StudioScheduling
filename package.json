@@ -8,6 +8,8 @@
     "install:server": "npm install --prefix server",
     "install:client": "npm install --prefix client",
     "migrate": "cd server && npm run migrate:up",
+    "delete": "cd server && npm run reset",
+    "reset": "cd server && npm run reset && npm run migrate:up",
     "seed": "cd server && npm run seed",
     "dev:server": "cd server && npm run dev",
     "dev:client": "cd client && npm run dev",

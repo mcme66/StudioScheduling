@@ -9,6 +9,7 @@
     "dev:watch": "node --watch src/index.js",
     "migrate": "node-pg-migrate -m migrations -j js",
     "migrate:up": "node-pg-migrate up -m migrations -j js",
+    "reset": "node src/reset.js",
     "seed": "node src/seed.js"
   },
   "engines": {

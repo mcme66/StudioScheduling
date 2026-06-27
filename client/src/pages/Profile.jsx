@@ -36,6 +36,7 @@ export default function Profile() {
     fullName: '',
     phone: '',
     receiveEmails: true,
+    trackPayments: false,
     bio: '',
     defaultPrice: '74',
     defaultDurationMin: '45',
@@ -51,6 +52,7 @@ export default function Profile() {
         fullName: t.fullName || '',
         phone: t.phone || '',
         bio: t.bio || '',
+        trackPayments: t.trackPayments === true,
         defaultPrice: String((t.defaultPriceCents || 7400) / 100),
         defaultDurationMin: String(t.defaultDurationMin || 45),
         studioId: studio ? String(studio.id) : '',
@@ -87,6 +89,7 @@ export default function Profile() {
             bio: form.bio || '',
             defaultPriceCents: Math.round(Number(form.defaultPrice || 0) * 100),
             defaultDurationMin: Number(form.defaultDurationMin || 45),
+            trackPayments: form.trackPayments,
           },
         });
 
@@ -207,6 +210,23 @@ export default function Profile() {
                     min="5"
                     value={form.defaultDurationMin}
                     onChange={update('defaultDurationMin')}
+                  />
+                </div>
+              </div>
+              <div className={`recurring-toggle${form.trackPayments ? ' active' : ''}`}>
+                <div
+                  className="recurring-toggle-row"
+                  onClick={() => setForm((f) => ({ ...f, trackPayments: !f.trackPayments }))}
+                >
+                  <div className="recurring-toggle-label">
+                    <strong>Track payments</strong>
+                    <span>Let you and your students mark lessons as paid</span>
+                  </div>
+                  <button
+                    type="button"
+                    className={`switch${form.trackPayments ? ' on' : ''}`}
+                    aria-pressed={form.trackPayments}
+                    aria-label="Toggle payment tracking"
                   />
                 </div>
               </div>

@@ -22,6 +22,7 @@ export const up = (pgm) => {
     teaching_policies: { type: 'text' },
     default_price_cents: { type: 'integer', notNull: true, default: 7400 },
     default_duration_min: { type: 'integer', notNull: true, default: 45 },
+    track_payments: { type: 'boolean', notNull: true, default: false },
     created_at: { type: 'timestamptz', notNull: true, default: pgm.func('now()') },
   });
 
@@ -111,6 +112,7 @@ export const up = (pgm) => {
     student_id: { type: 'integer', notNull: true, references: 'students', onDelete: 'CASCADE' },
     lesson_date: { type: 'date', notNull: true },
     status: { type: 'text', notNull: true, default: 'booked' },
+    paid: { type: 'boolean', notNull: true, default: false },
     reminder_sent_at: { type: 'timestamptz' },
     created_at: { type: 'timestamptz', notNull: true, default: pgm.func('now()') },
     cancelled_at: { type: 'timestamptz' },

@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
+import PaidToggle from '../components/PaidToggle.jsx';
 import { WEEKDAYS, fmtTimeRange, fmtDate } from '../lib/format.js';
 
 export default function MyLessons() {
@@ -20,6 +21,12 @@ export default function MyLessons() {
       toast('Lesson cancelled.');
       queryClient.invalidateQueries({ queryKey: ['my-lessons'] });
     },
+    onError: (err) => toast(err.message),
+  });
+
+  const paidMutation = useMutation({
+    mutationFn: ({ id, paid }) => api(`/bookings/${id}/paid`, { method: 'PATCH', body: { paid } }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['my-lessons'] }),
     onError: (err) => toast(err.message),
   });
 
@@ -72,14 +79,23 @@ export default function MyLessons() {
                     {fmtTimeRange(b.startTime, b.durationMin)}
                     <div className="contact">{b.teacher.name}</div>
                   </div>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => cancel(b.id)}
-                    disabled={cancelMutation.isPending}
-                  >
-                    Cancel
-                  </button>
+                  <div className="row" style={{ gap: '0.4rem' }}>
+                    {b.trackPayments && (
+                      <PaidToggle
+                        paid={b.paid}
+                        disabled={paidMutation.isPending}
+                        onChange={(paid) => paidMutation.mutate({ id: b.id, paid })}
+                      />
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => cancel(b.id)}
+                      disabled={cancelMutation.isPending}
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 </div>
               ))
             )}
@@ -98,6 +114,13 @@ export default function MyLessons() {
                     {fmtTimeRange(b.startTime, b.durationMin)}
                     <div className="contact">{b.teacher.name}</div>
                   </div>
+                  {b.trackPayments && (
+                    <PaidToggle
+                      paid={b.paid}
+                      disabled={paidMutation.isPending}
+                      onChange={(paid) => paidMutation.mutate({ id: b.id, paid })}
+                    />
+                  )}
                 </div>
               ))}
             </div>

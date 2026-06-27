@@ -16,6 +16,10 @@ const createSchema = z.object({
   lessonDate: z.string().refine(isValidDateStr, 'lessonDate must be YYYY-MM-DD.'),
 });
 
+const paidSchema = z.object({
+  paid: z.boolean(),
+});
+
 bookingsRouter.post(
   '/',
   requireAuth,
@@ -104,9 +108,9 @@ bookingsRouter.get(
       throw new HttpError(403, 'Only students have personal bookings.');
     }
     const { rows: bookings } = await query(
-      `SELECT b.id, b.lesson_date, b.status, b.created_at,
+      `SELECT b.id, b.lesson_date, b.status, b.created_at, b.paid,
               s.weekday, s.start_time, s.duration_min, s.price_cents,
-              t.id AS teacher_id, t.full_name AS teacher_name
+              t.id AS teacher_id, t.full_name AS teacher_name, t.track_payments
          FROM bookings b
          JOIN slots s ON s.id = b.slot_id
          JOIN teachers t ON t.id = s.teacher_id
@@ -133,6 +137,8 @@ bookingsRouter.get(
       startTime: fmtTime(b.start_time),
       durationMin: b.duration_min,
       priceCents: b.price_cents,
+      paid: b.paid === true,
+      trackPayments: b.track_payments === true,
       teacher: { id: b.teacher_id, name: b.teacher_name },
       past: fmtDate(b.lesson_date) < today,
     }));
@@ -149,6 +155,43 @@ bookingsRouter.get(
         teacher: { id: r.teacher_id, name: r.teacher_name },
       })),
     });
+  }),
+);
+
+bookingsRouter.patch(
+  '/:id/paid',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const { paid } = paidSchema.parse(req.body);
+
+    const { rows } = await query(
+      `SELECT b.*, s.teacher_id, t.track_payments
+         FROM bookings b
+         JOIN slots s ON s.id = b.slot_id
+         JOIN teachers t ON t.id = s.teacher_id
+        WHERE b.id = $1`,
+      [id],
+    );
+    const booking = rows[0];
+    if (!booking || booking.status !== 'booked') {
+      throw new HttpError(404, 'Booking not found.');
+    }
+    if (!booking.track_payments) {
+      throw new HttpError(403, 'This instructor does not track payments.');
+    }
+
+    const isOwnerStudent = req.user.role === 'student' && booking.student_id === req.user.id;
+    const isOwnerTeacher = req.user.role === 'teacher' && booking.teacher_id === req.user.id;
+    if (!isOwnerStudent && !isOwnerTeacher) {
+      throw new HttpError(403, 'You cannot update payment for this booking.');
+    }
+
+    const { rows: updated } = await query(
+      'UPDATE bookings SET paid = $1 WHERE id = $2 RETURNING id, paid',
+      [paid, id],
+    );
+    res.json({ booking: { id: updated[0].id, paid: updated[0].paid === true } });
   }),
 );
 
