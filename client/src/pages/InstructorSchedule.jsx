@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
@@ -15,6 +15,8 @@ import {
   addWeeks,
   weekRangeLabel,
   todayISO,
+  isSlotPast,
+  isSlotBookable,
 } from '../lib/format.js';
 
 const MAX_WEEKS_AHEAD = 2;
@@ -30,8 +32,10 @@ export default function InstructorSchedule() {
   const queryClient = useQueryClient();
 
   const [weekOffset, setWeekOffset] = useState(0);
+  const [userPickedWeek, setUserPickedWeek] = useState(false);
   const [selected, setSelected] = useState(null); // slot object
   const [wantsRecurring, setWantsRecurring] = useState(false);
+  const confirmRef = useRef(null);
 
   const baseMonday = getMonday(todayISO());
   const weekStart = addWeeks(baseMonday, weekOffset);
@@ -43,6 +47,22 @@ export default function InstructorSchedule() {
       api(`/teachers/${teacherId}/schedule?week=${weekStart}&studio=${encodeURIComponent(slug)}`),
     refetchInterval: 15000,
   });
+
+  // If the current week has no bookable slots left, jump ahead to the next week.
+  useEffect(() => {
+    if (userPickedWeek || isLoading || !data?.slots?.length) return;
+    const hasBookable = data.slots.some(isSlotBookable);
+    if (!hasBookable && weekOffset < MAX_WEEKS_AHEAD) {
+      setWeekOffset((o) => o + 1);
+      setSelected(null);
+    }
+  }, [data, isLoading, weekOffset, userPickedWeek]);
+
+  useEffect(() => {
+    if (selected && confirmRef.current) {
+      confirmRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [selected]);
 
   const bookMutation = useMutation({
     mutationFn: async ({ slot, recurring }) => {
@@ -79,7 +99,7 @@ export default function InstructorSchedule() {
   }, [data]);
 
   const selectSlot = (slot) => {
-    if (slot.status !== 'open') return;
+    if (!isSlotBookable(slot)) return;
     if (!user || user.role !== 'student') {
       navigate('/student/login', { state: { from: location } });
       return;
@@ -88,7 +108,8 @@ export default function InstructorSchedule() {
     setWantsRecurring(false);
   };
 
-  const statusLabel = (slot) => {
+  const statusLabel = (slot, past) => {
+    if (past) return 'Already passed';
     if (slot.mine && slot.status === 'recurring') return 'Your weekly spot';
     if (slot.mine && slot.status === 'booked') return 'Booked by you';
     if (slot.mine && slot.status === 'pending') return 'Weekly spot pending';
@@ -137,6 +158,7 @@ export default function InstructorSchedule() {
           type="button"
           className="week-nav-btn"
           onClick={() => {
+            setUserPickedWeek(true);
             setWeekOffset((o) => Math.max(0, o - 1));
             setSelected(null);
           }}
@@ -152,6 +174,7 @@ export default function InstructorSchedule() {
           type="button"
           className="week-nav-btn"
           onClick={() => {
+            setUserPickedWeek(true);
             setWeekOffset((o) => Math.min(MAX_WEEKS_AHEAD, o + 1));
             setSelected(null);
           }}
@@ -173,13 +196,19 @@ export default function InstructorSchedule() {
         <section className="day-group" key={weekday}>
           <div className="day-group-head">
             <span className="day-group-name">{WEEKDAYS[weekday]}</span>
-            <span className="day-group-date">{fmtDate(slots[0].lessonDate)}</span>
+            <span className="day-group-sep"> - </span>
+            <span className="day-group-date">
+              {fmtDate(slots[0].lessonDate, { month: 'long', day: 'numeric' })}
+            </span>
           </div>
           <div className="day-group-slots">
             {slots.map((slot) => {
+              const past = slot.status === 'open' && isSlotPast(slot.lessonDate, slot.startTime);
               const taken = slot.status !== 'open';
+              const disabled = taken || past;
               const cls = ['slot-card'];
               if (slot.mine) cls.push('mine');
+              else if (past) cls.push('past');
               else if (taken) cls.push('taken');
               if (slot.status === 'pending') cls.push('pending');
               if (selected?.id === slot.id) cls.push('selected');
@@ -189,9 +218,9 @@ export default function InstructorSchedule() {
                   className={cls.join(' ')}
                   onClick={() => selectSlot(slot)}
                   role="button"
-                  tabIndex={taken ? -1 : 0}
+                  tabIndex={disabled ? -1 : 0}
                   onKeyDown={(e) => {
-                    if ((e.key === 'Enter' || e.key === ' ') && !taken) {
+                    if ((e.key === 'Enter' || e.key === ' ') && !disabled) {
                       e.preventDefault();
                       selectSlot(slot);
                     }
@@ -204,18 +233,20 @@ export default function InstructorSchedule() {
                       {slot.durationMin} min · {fmtPrice(slot.priceCents)}
                     </div>
                   </div>
-                  {taken && (
+                  {(taken || past) && (
                     <span
-                      className={`slot-status${slot.status === 'pending' ? ' slot-status-pending' : ''}`}
+                      className={`slot-status${slot.status === 'pending' ? ' slot-status-pending' : ''}${past ? ' slot-status-past' : ''}`}
                       style={{
-                        color: slot.mine
-                          ? 'var(--green)'
-                          : slot.status === 'pending'
-                            ? '#a05a00'
-                            : 'var(--muted)',
+                        color: past
+                          ? '#8a8578'
+                          : slot.mine
+                            ? 'var(--green)'
+                            : slot.status === 'pending'
+                              ? '#a05a00'
+                              : 'var(--muted)',
                       }}
                     >
-                      {statusLabel(slot)}
+                      {statusLabel(slot, past)}
                     </span>
                   )}
                 </div>
@@ -226,7 +257,7 @@ export default function InstructorSchedule() {
       ))}
 
       {selected && (
-        <div className="card">
+        <div className="card confirm-lesson" ref={confirmRef}>
           <div className="section-title">Confirm your lesson</div>
           <p style={{ fontSize: '14px', marginBottom: '0.75rem' }}>
             <strong>{WEEKDAYS[selected.weekday]}</strong>, {fmtDate(selected.lessonDate)} ·{' '}

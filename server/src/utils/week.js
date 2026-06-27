@@ -34,10 +34,26 @@ export function dateForWeekday(mondayStr, weekday) {
   return toISODate(new Date(monday.getTime() + offset * DAY_MS));
 }
 
+export function addWeeks(mondayStr, weeks) {
+  const monday = parseDate(mondayStr);
+  return toISODate(new Date(monday.getTime() + weeks * 7 * DAY_MS));
+}
+
 export function todayISO() {
   return toISODate(new Date());
 }
 
 export function isValidDateStr(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+/** True when lesson date/time is now or in the past (local server time). */
+export function isLessonPast(lessonDate, startTime) {
+  const today = todayISO();
+  if (lessonDate < today) return true;
+  if (lessonDate > today) return false;
+  const t = typeof startTime === 'string' ? startTime.slice(0, 5) : startTime;
+  const [h, m] = t.split(':').map(Number);
+  const now = new Date();
+  return h * 60 + m <= now.getHours() * 60 + now.getMinutes();
 }

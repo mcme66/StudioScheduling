@@ -72,3 +72,28 @@ export function weekRangeLabel(mondayStr) {
   const f = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
   return `${f(monday)} – ${f(friday)}`;
 }
+
+export function dateForWeekday(mondayStr, weekday) {
+  const monday = parse(mondayStr);
+  const offset = weekday === 0 ? 6 : weekday - 1;
+  return iso(new Date(monday.getTime() + offset * DAY_MS));
+}
+
+/** True when a lesson's start date/time is now or in the past (local time). */
+export function isSlotPast(lessonDate, startTime) {
+  if (!lessonDate || !startTime) return false;
+  const [h, m] = startTime.split(':').map(Number);
+  const slotStart = new Date(`${lessonDate}T00:00:00`);
+  slotStart.setHours(h, m, 0, 0);
+  return slotStart.getTime() <= Date.now();
+}
+
+export function isSlotBookable(slot) {
+  return slot.status === 'open' && !isSlotPast(slot.lessonDate, slot.startTime);
+}
+
+/** Last bookable date (Sunday of the week 2 weeks ahead). */
+export function maxBookableDate() {
+  const monday = addWeeks(getMonday(todayISO()), 2);
+  return dateForWeekday(monday, 0);
+}

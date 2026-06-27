@@ -33,6 +33,7 @@ body {
   color: var(--ink);
   font-weight: 400;
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 
 a {
@@ -41,11 +42,6 @@ a {
 }
 a:hover {
   text-decoration: underline;
-}
-
-.serif {
-  font-family: 'DM Serif Display', serif;
-  font-weight: 400;
 }
 
 /* Layout shell */
@@ -60,14 +56,30 @@ a:hover {
 }
 .header-brand {
   font-family: 'DM Serif Display', serif;
-  font-size: 1.3rem;
+  font-size: 1.8rem;
   color: var(--white);
   text-align: center;
   white-space: nowrap;
+  padding: 0.35rem 1.1rem;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 10px;
 }
 .header-brand:hover {
   text-decoration: none;
   opacity: 0.92;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+/* Left-side nav buttons: serif font + faint outline, sized to match the Log out button. */
+.app-header .header-nav-pill {
+  font-family: 'DM Serif Display', serif;
+  font-size: 12px;
+  padding: 6px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 9px;
+  white-space: nowrap;
+}
+.app-header .header-nav-pill:hover {
+  border-color: rgba(255, 255, 255, 0.4);
 }
 .header-side {
   display: flex;
@@ -113,23 +125,6 @@ a:hover {
 .header-auth-student:hover {
   background: rgba(45, 106, 79, 0.4) !important;
 }
-.header-auth-link {
-  font-size: 13px !important;
-  color: #aaa !important;
-}
-.app-header .user-chip {
-  font-size: 13px;
-  color: #bbb;
-}
-.user-chip-link {
-  padding: 6px 10px;
-  border-radius: 8px;
-}
-.user-chip-link:hover {
-  color: var(--white);
-  background: rgba(255, 255, 255, 0.08);
-  text-decoration: none;
-}
 @media (max-width: 640px) {
   .app-header {
     grid-template-columns: 1fr 1fr;
@@ -155,6 +150,14 @@ a:hover {
 }
 .container.narrow {
   max-width: 520px;
+}
+@media (max-width: 560px) {
+  .container {
+    padding: 1.5rem 1rem 2.5rem;
+  }
+  .page-title {
+    font-size: 1.6rem;
+  }
 }
 
 /* Cards */
@@ -314,11 +317,6 @@ a:hover {
 .center {
   text-align: center;
 }
-.stack {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
 .row {
   display: flex;
   align-items: center;
@@ -326,9 +324,6 @@ a:hover {
 }
 .spread {
   justify-content: space-between;
-}
-.wrap {
-  flex-wrap: wrap;
 }
 
 .pill {
@@ -344,10 +339,6 @@ a:hover {
 .pill-taken {
   background: var(--green-light);
   color: var(--green);
-}
-.pill-pending {
-  background: #fef3e2;
-  color: #a05a00;
 }
 
 /* Toast */
@@ -377,33 +368,6 @@ a:hover {
   text-align: center;
   color: var(--muted);
   font-size: 14px;
-}
-
-/* Role toggle */
-.role-toggle {
-  display: flex;
-  gap: 6px;
-  background: var(--cream);
-  border-radius: 10px;
-  padding: 4px;
-  margin-bottom: 1.1rem;
-}
-.role-toggle-btn {
-  flex: 1;
-  font-family: 'DM Sans', sans-serif;
-  font-size: 13px;
-  font-weight: 500;
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  padding: 9px;
-  border-radius: 8px;
-  cursor: pointer;
-}
-.role-toggle-btn.active {
-  background: var(--white);
-  color: var(--ink);
-  box-shadow: var(--shadow);
 }
 
 /* Week navigation */
@@ -454,7 +418,8 @@ a:hover {
 .day-group-head {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 4px;
   margin-bottom: 10px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border);
@@ -465,9 +430,17 @@ a:hover {
   text-transform: uppercase;
   letter-spacing: 0.07em;
 }
-.day-group-date {
-  font-size: 12px;
+.day-group-sep {
+  font-size: 13px;
+  font-weight: 600;
   color: var(--muted);
+}
+.day-group-date {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #6a655c;
 }
 .day-group-slots {
   display: flex;
@@ -491,6 +464,12 @@ a:hover {
   border-color: var(--accent);
   box-shadow: 0 2px 12px rgba(200, 64, 26, 0.1);
 }
+@media (max-width: 560px) {
+  .slot-card {
+    padding: 0.75rem 0.85rem;
+    gap: 0.6rem;
+  }
+}
 .slot-card.selected {
   border-color: var(--accent);
   background: var(--accent-light);
@@ -499,6 +478,17 @@ a:hover {
   opacity: 0.6;
   cursor: not-allowed;
   background: var(--cream);
+}
+.slot-card.past {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: var(--cream);
+  border-style: dashed;
+  border-color: var(--border);
+}
+.slot-card.past .slot-time,
+.slot-card.past .slot-meta {
+  color: var(--muted);
 }
 .slot-card.pending {
   border-color: #f0c090;
@@ -542,6 +532,7 @@ a:hover {
   font-size: 12px;
   font-weight: 500;
   white-space: nowrap;
+  text-align: right;
 }
 
 /* Recurring toggle */
@@ -697,6 +688,42 @@ a:hover {
   flex: 1;
 }
 
+/* Studio availability search */
+.studio-search {
+  margin-bottom: 1.5rem;
+}
+.studio-search-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 0.75rem;
+  align-items: end;
+}
+.studio-search-form .field {
+  margin-bottom: 0;
+}
+.studio-search-results {
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--cream);
+}
+.availability-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+a.availability-row {
+  text-decoration: none;
+  color: inherit;
+}
+a.availability-row:hover {
+  text-decoration: none;
+}
+@media (max-width: 640px) {
+  .studio-search-form {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Teacher dashboard grid */
 .day-grid {
   display: grid;
@@ -781,6 +808,7 @@ a:hover {
 }
 .list-row .grow {
   flex: 1;
+  min-width: 0;
 }
 .list-row .when {
   min-width: 130px;
@@ -795,6 +823,29 @@ a:hover {
 .contact {
   font-size: 12px;
   color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* Stack list rows on small phones so long emails and action buttons don't overflow. */
+@media (max-width: 560px) {
+  .list-row {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .list-row .when {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+  .list-row .grow {
+    flex: 1 1 100%;
+    order: 2;
+  }
+  .list-row > .row,
+  .list-row > .pill {
+    order: 3;
+    margin-left: auto;
+  }
 }
 
 /* Share panel */
@@ -850,6 +901,10 @@ a:hover {
 @media (max-width: 960px) {
   .schedule-layout {
     grid-template-columns: 1fr;
+  }
+  /* Show the actual schedule before the info/policy panels on narrow screens. */
+  .schedule-main {
+    order: -1;
   }
   .schedule-info-panel {
     position: static;
@@ -917,4 +972,8 @@ a:hover {
 }
 .rich-text-empty {
   font-size: 13px;
+}
+
+.confirm-lesson {
+  scroll-margin-top: 1rem;
 }

@@ -16,55 +16,42 @@ export default function Layout() {
         <div className="header-side header-left">
           {user?.role === 'teacher' ? (
             <>
-              <NavLink to="/" end>
-                Studios
+              <NavLink to="/teacher" className="header-nav-pill">
+                Dashboard
               </NavLink>
-              <NavLink to="/teacher">Dashboard</NavLink>
+              <Link to="/profile" className="header-nav-pill">
+                {user.fullName}
+              </Link>
             </>
           ) : user?.role === 'student' ? (
-            <NavLink to="/" end>
-              Studios
-            </NavLink>
-          ) : (
             <>
-              <NavLink to="/teacher/login" className="header-auth-btn header-auth-teacher">
-                Teacher Login
+              <NavLink to="/my-lessons" className="header-nav-pill">
+                My Lessons
               </NavLink>
-              <NavLink to="/teacher/register" className="header-auth-link">
-                Sign up - Teacher
-              </NavLink>
+              <Link to="/profile" className="header-nav-pill">
+                {user.fullName}
+              </Link>
             </>
+          ) : (
+            <NavLink to="/teacher/login" className="header-auth-btn header-auth-teacher">
+              Teacher Login
+            </NavLink>
           )}
         </div>
 
         <Link to="/" className="header-brand">
-          Lesson Scheduling
+          Studio Core
         </Link>
 
         <div className="header-side header-right">
-          {user?.role === 'student' && (
-            <>
-              <NavLink to="/my-lessons">My Lessons</NavLink>
-            </>
-          )}
           {user ? (
-            <>
-              <Link to="/profile" className="user-chip user-chip-link">
-                {user.fullName}
-              </Link>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={handleLogout}>
-                Log out
-              </button>
-            </>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={handleLogout}>
+              Log out
+            </button>
           ) : (
-            <>
-              <NavLink to="/student/register" className="header-auth-link">
-                Sign up - Student
-              </NavLink>
-              <NavLink to="/student/login" className="header-auth-btn header-auth-student">
-                Student Login
-              </NavLink>
-            </>
+            <NavLink to="/student/login" className="header-auth-btn header-auth-student">
+              Student Login
+            </NavLink>
           )}
         </div>
       </header>

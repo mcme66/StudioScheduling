@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { query, withTransaction } from '../db.js';
 import { asyncHandler, HttpError } from '../middleware/error.js';
 import { requireAuth } from '../middleware/auth.js';
-import { weekdayOf, isValidDateStr, todayISO } from '../utils/week.js';
+import { weekdayOf, isValidDateStr, todayISO, isLessonPast } from '../utils/week.js';
 import { sendBookingConfirmation } from '../services/email.js';
 
 export const bookingsRouter = Router();
@@ -40,6 +40,10 @@ bookingsRouter.post(
       );
       const slot = slotRows[0];
       if (!slot || !slot.active) throw new HttpError(404, 'That lesson time is not available.');
+
+      if (isLessonPast(lessonDate, slot.start_time)) {
+        throw new HttpError(400, 'That lesson time has already passed.');
+      }
 
       if (weekdayOf(lessonDate) !== slot.weekday) {
         throw new HttpError(400, 'That date does not match the lesson day.');
