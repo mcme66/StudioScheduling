@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { api } from '../api/client.js';
+import PasswordField from '../components/PasswordField.jsx';
 
 export default function TeacherRegister() {
   const { register } = useAuth();
@@ -16,6 +17,7 @@ export default function TeacherRegister() {
     fullName: '',
     email: '',
     password: '',
+    confirmPassword: '',
     phone: '',
     bio: '',
     defaultPrice: '74',
@@ -30,6 +32,10 @@ export default function TeacherRegister() {
   const submit = async (e) => {
     e.preventDefault();
     setError('');
+    if (form.password !== form.confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
     setBusy(true);
     try {
       const payload = {
@@ -89,17 +95,20 @@ export default function TeacherRegister() {
           <label>Email</label>
           <input type="email" value={form.email} onChange={update('email')} autoComplete="email" required />
         </div>
-        <div className="field">
-          <label>Password</label>
-          <input
-            type="password"
-            value={form.password}
-            onChange={update('password')}
-            autoComplete="new-password"
-            minLength={8}
-            required
-          />
-        </div>
+        <PasswordField
+          label="Password"
+          value={form.password}
+          onChange={update('password')}
+          minLength={8}
+          required
+        />
+        <PasswordField
+          label="Confirm password"
+          value={form.confirmPassword}
+          onChange={update('confirmPassword')}
+          minLength={8}
+          required
+        />
         <div className="field">
           <label>Phone (optional)</label>
           <input value={form.phone} onChange={update('phone')} autoComplete="tel" />

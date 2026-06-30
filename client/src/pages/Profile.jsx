@@ -51,6 +51,7 @@ export default function Profile() {
       setForm({
         fullName: t.fullName || '',
         phone: t.phone || '',
+        receiveEmails: t.receiveEmails !== false,
         bio: t.bio || '',
         trackPayments: t.trackPayments === true,
         defaultPrice: String((t.defaultPriceCents || 7400) / 100),
@@ -90,6 +91,7 @@ export default function Profile() {
             defaultPriceCents: Math.round(Number(form.defaultPrice || 0) * 100),
             defaultDurationMin: Number(form.defaultDurationMin || 45),
             trackPayments: form.trackPayments,
+            receiveEmails: form.receiveEmails,
           },
         });
 
@@ -180,6 +182,23 @@ export default function Profile() {
 
           {isTeacher && (
             <>
+              <div className={`recurring-toggle${form.receiveEmails ? ' active' : ''}`}>
+                <div
+                  className="recurring-toggle-row"
+                  onClick={() => setForm((f) => ({ ...f, receiveEmails: !f.receiveEmails }))}
+                >
+                  <div className="recurring-toggle-label">
+                    <strong>Receive emails?</strong>
+                    <span>Daily morning schedule emails</span>
+                  </div>
+                  <button
+                    type="button"
+                    className={`switch${form.receiveEmails ? ' on' : ''}`}
+                    aria-pressed={form.receiveEmails}
+                    aria-label="Toggle email notifications"
+                  />
+                </div>
+              </div>
               <div className="field">
                 <label>Studio</label>
                 <p className="muted" style={{ fontSize: '12px', marginBottom: '6px' }}>

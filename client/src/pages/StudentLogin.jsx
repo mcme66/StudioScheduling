@@ -1,15 +1,17 @@
 import { useState } from 'react';
-import { useNavigate, useLocation, Link } from 'react-router-dom';
+import { useNavigate, useLocation, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.jsx';
 
 export default function StudentLogin() {
   const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const resetSuccess = searchParams.get('reset') === 'success';
 
   const submit = async (e) => {
     e.preventDefault();
@@ -31,6 +33,11 @@ export default function StudentLogin() {
       <p className="page-sub">Sign in to book lessons and manage your schedule.</p>
 
       <form className="card" onSubmit={submit}>
+        {resetSuccess && (
+          <p className="muted" style={{ marginBottom: '1rem', fontSize: '14px' }}>
+            Your password has been reset. You can log in now.
+          </p>
+        )}
         <div className="field">
           <label>Email</label>
           <input
@@ -50,6 +57,9 @@ export default function StudentLogin() {
             autoComplete="current-password"
             required
           />
+          <p style={{ marginTop: '0.35rem', fontSize: '13px', textAlign: 'right' }}>
+            <Link to="/student/forgot-password">Forgot my password?</Link>
+          </p>
         </div>
         {error && <p className="error-text">{error}</p>}
         <button type="submit" className="btn btn-green btn-block" disabled={busy}>

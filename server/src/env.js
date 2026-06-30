@@ -33,6 +33,8 @@ export const env = {
     from: process.env.EMAIL_FROM || 'Lesson Scheduling <no-reply@example.com>',
   },
   reminderLeadHours: Number(process.env.REMINDER_LEAD_HOURS) || 24,
+  passwordResetExpiresHours: Number(process.env.PASSWORD_RESET_EXPIRES_HOURS) || 1,
+  teacherDailyScheduleTimezone: process.env.TEACHER_DAILY_SCHEDULE_TIMEZONE || 'America/Denver',
 };
 
 export const isEmailConfigured = Boolean(env.smtp.host && env.smtp.user);

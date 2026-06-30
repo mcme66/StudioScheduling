@@ -1,14 +1,19 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { query } from '../db.js';
+import { query, withTransaction } from '../db.js';
 import { asyncHandler, HttpError } from '../middleware/error.js';
 import { requireRole } from '../middleware/auth.js';
+import { weekdayOf, isValidDateStr, todayISO } from '../utils/week.js';
 
 export const slotsRouter = Router();
 
 slotsRouter.use(requireRole('teacher'));
 
 const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+const dateSchema = z.object({
+  date: z.string().refine(isValidDateStr, 'date must be YYYY-MM-DD.'),
+});
 
 const createSchema = z.object({
   weekday: z.number().int().min(0).max(6),
@@ -115,6 +120,62 @@ slotsRouter.patch(
       throw new HttpError(404, 'Slot not found.');
     }
     res.json({ slot: serializeSlot(rows[0]) });
+  }),
+);
+
+// Block a single week of a slot: nobody can book it that week and any active
+// booking on that date is cancelled.
+slotsRouter.post(
+  '/:id/block',
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const { date } = dateSchema.parse(req.body);
+
+    const { rows } = await query(
+      'SELECT id, weekday FROM slots WHERE id = $1 AND teacher_id = $2',
+      [id, req.user.id],
+    );
+    const slot = rows[0];
+    if (!slot) throw new HttpError(404, 'Slot not found.');
+    if (date < todayISO()) throw new HttpError(400, 'That date is in the past.');
+    if (weekdayOf(date) !== slot.weekday) {
+      throw new HttpError(400, 'That date does not match the lesson day.');
+    }
+
+    await withTransaction(async (client) => {
+      await client.query(
+        `INSERT INTO slot_exceptions (slot_id, exception_date, kind)
+         VALUES ($1, $2, 'blocked')
+         ON CONFLICT (slot_id, exception_date) DO UPDATE SET kind = 'blocked'`,
+        [id, date],
+      );
+      await client.query(
+        "UPDATE bookings SET status = 'cancelled', cancelled_at = now() WHERE slot_id = $1 AND lesson_date = $2 AND status = 'booked'",
+        [id, date],
+      );
+    });
+    res.json({ ok: true });
+  }),
+);
+
+// Remove a single-week exception (undo a skip or block).
+slotsRouter.delete(
+  '/:id/exceptions',
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const { date } = dateSchema.parse(req.body);
+
+    const { rows } = await query(
+      'SELECT id FROM slots WHERE id = $1 AND teacher_id = $2',
+      [id, req.user.id],
+    );
+    if (!rows[0]) throw new HttpError(404, 'Slot not found.');
+
+    await query(
+      'DELETE FROM slot_exceptions WHERE slot_id = $1 AND exception_date = $2',
+      [id, date],
+    );
+    res.json({ ok: true });
   }),
 );
 

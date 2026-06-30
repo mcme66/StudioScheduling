@@ -224,6 +224,30 @@ a:hover {
   border-color: var(--accent);
 }
 
+.password-input-wrap {
+  position: relative;
+}
+.password-input-wrap input {
+  padding-right: 4.5rem;
+}
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+.password-toggle:hover {
+  color: var(--accent);
+}
+
 /* Buttons */
 .btn {
   font-family: 'DM Sans', sans-serif;
@@ -339,6 +363,73 @@ a:hover {
 .pill-taken {
   background: var(--green-light);
   color: var(--green);
+}
+.pill-warn {
+  background: #fdeede;
+  color: #a05a00;
+}
+
+/* Modal */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 18, 14, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 1000;
+}
+.modal-card {
+  width: 100%;
+  max-width: 420px;
+  margin: 0;
+}
+.modal-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+.modal-subtitle {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0 0 1rem;
+}
+.modal-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 11px 13px;
+  margin-bottom: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--white);
+  cursor: pointer;
+}
+.modal-option:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.modal-option:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.modal-option.danger:hover:not(:disabled) {
+  border-color: var(--danger);
+}
+.modal-option-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.modal-option.danger .modal-option-label {
+  color: var(--danger);
+}
+.modal-option-desc {
+  font-size: 12px;
+  color: var(--muted);
 }
 
 /* Toast */
@@ -792,6 +883,30 @@ a.availability-row:hover {
   border-radius: 7px;
   padding: 6px;
   background: var(--white);
+}
+
+/* Weekly spot occurrences */
+.weekly-spot {
+  border-bottom: 1px solid var(--cream);
+}
+.weekly-spot:last-child {
+  border-bottom: none;
+}
+.weekly-occurrences {
+  padding: 6px 0 12px 130px;
+}
+.occurrence-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  padding: 4px 0;
+}
+@media (max-width: 560px) {
+  .weekly-occurrences {
+    padding-left: 0;
+  }
 }
 
 /* List rows */

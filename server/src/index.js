@@ -13,6 +13,7 @@ import { recurringRouter } from './routes/recurring.js';
 import { studiosRouter } from './routes/studios.js';
 import { studentsRouter } from './routes/students.js';
 import { startReminderJob } from './services/reminders.js';
+import { startTeacherDailyScheduleJob } from './services/teacherDailySchedule.js';
 
 const app = express();
 
@@ -49,4 +50,5 @@ app.use(errorHandler);
 app.listen(env.port, '0.0.0.0', () => {
   console.log(`Lesson Scheduling API listening on port ${env.port} (${env.nodeEnv})`);
   startReminderJob();
+  startTeacherDailyScheduleJob();
 });

@@ -49,11 +49,23 @@ bookingsRouter.post(
         throw new HttpError(400, 'That date does not match the lesson day.');
       }
 
+      const { rows: excRows } = await client.query(
+        'SELECT kind FROM slot_exceptions WHERE slot_id = $1 AND exception_date = $2',
+        [slotId, lessonDate],
+      );
+      const exception = excRows[0];
+      if (exception?.kind === 'blocked') {
+        throw new HttpError(409, 'That time is unavailable that week.');
+      }
+      const skippedThisWeek = exception?.kind === 'skipped';
+
       const { rows: recRows } = await client.query(
         "SELECT student_id FROM recurring_assignments WHERE slot_id = $1 AND status = 'approved'",
         [slotId],
       );
-      if (recRows[0]) {
+      // A skipped week reopens the slot for anyone, so the weekly holder does
+      // not block bookings on that specific date.
+      if (recRows[0] && !skippedThisWeek) {
         if (recRows[0].student_id === req.user.id) {
           throw new HttpError(409, 'You already hold this time as a weekly spot.');
         }
@@ -124,8 +136,8 @@ bookingsRouter.get(
     );
 
     const { rows: recurring } = await query(
-      `SELECT ra.id, s.weekday, s.start_time, s.duration_min, s.price_cents,
-              t.id AS teacher_id, t.full_name AS teacher_name
+      `SELECT ra.id, ra.slot_id, s.weekday, s.start_time, s.duration_min, s.price_cents,
+              t.id AS teacher_id, t.full_name AS teacher_name, t.track_payments
          FROM recurring_assignments ra
          JOIN slots s ON s.id = ra.slot_id
          JOIN teachers t ON t.id = s.teacher_id
@@ -135,6 +147,42 @@ bookingsRouter.get(
     );
 
     const today = todayISO();
+
+    // Upcoming per-week exceptions for this student's weekly slots.
+    const recurringSlotIds = recurring.map((r) => r.slot_id);
+    let exceptionsBySlot = new Map();
+    if (recurringSlotIds.length) {
+      const { rows: excRows } = await query(
+        `SELECT slot_id, exception_date, kind FROM slot_exceptions
+          WHERE slot_id = ANY($1::int[]) AND exception_date >= $2`,
+        [recurringSlotIds, today],
+      );
+      for (const e of excRows) {
+        const date = fmtDate(e.exception_date);
+        if (!exceptionsBySlot.has(e.slot_id)) exceptionsBySlot.set(e.slot_id, []);
+        exceptionsBySlot.get(e.slot_id).push({ date, kind: e.kind });
+      }
+    }
+
+    let paymentsByRecurring = new Map();
+    if (recurring.length) {
+      const recurringIds = recurring.map((r) => r.id);
+      const { rows: payRows } = await query(
+        `SELECT recurring_assignment_id, lesson_date, paid
+           FROM recurring_lesson_payments
+          WHERE recurring_assignment_id = ANY($1::int[])
+            AND lesson_date >= $2`,
+        [recurringIds, today],
+      );
+      for (const p of payRows) {
+        const rid = p.recurring_assignment_id;
+        if (!paymentsByRecurring.has(rid)) paymentsByRecurring.set(rid, []);
+        paymentsByRecurring.get(rid).push({
+          date: fmtDate(p.lesson_date),
+          paid: p.paid === true,
+        });
+      }
+    }
     const mapped = bookings.map((b) => ({
       id: b.id,
       lessonDate: fmtDate(b.lesson_date),
@@ -152,11 +200,15 @@ bookingsRouter.get(
       past: mapped.filter((b) => b.past).reverse(),
       recurring: recurring.map((r) => ({
         id: r.id,
+        slotId: r.slot_id,
         weekday: r.weekday,
         startTime: fmtTime(r.start_time),
         durationMin: r.duration_min,
         priceCents: r.price_cents,
+        trackPayments: r.track_payments === true,
         teacher: { id: r.teacher_id, name: r.teacher_name },
+        exceptions: exceptionsBySlot.get(r.slot_id) || [],
+        payments: paymentsByRecurring.get(r.id) || [],
       })),
     });
   }),

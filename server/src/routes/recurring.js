@@ -4,12 +4,22 @@ import { query, withTransaction } from '../db.js';
 import { asyncHandler, HttpError } from '../middleware/error.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { sendRecurringApproved } from '../services/email.js';
+import { weekdayOf, isValidDateStr, todayISO } from '../utils/week.js';
 
 export const recurringRouter = Router();
 
 const fmtTime = (t) => (typeof t === 'string' ? t.slice(0, 5) : t);
 
 const requestSchema = z.object({ slotId: z.number().int().positive() });
+
+const skipSchema = z.object({
+  date: z.string().refine(isValidDateStr, 'date must be YYYY-MM-DD.'),
+});
+
+const paidSchema = z.object({
+  date: z.string().refine(isValidDateStr, 'date must be YYYY-MM-DD.'),
+  paid: z.boolean(),
+});
 
 // Student requests a weekly spot.
 recurringRouter.post(
@@ -172,6 +182,136 @@ recurringRouter.post(
     }
     await query(
       "UPDATE recurring_assignments SET status = 'declined', decided_at = now() WHERE id = $1",
+      [id],
+    );
+    res.json({ ok: true });
+  }),
+);
+
+// Mark a single week of an approved weekly spot as paid/unpaid.
+recurringRouter.patch(
+  '/:id/paid',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const { date, paid } = paidSchema.parse(req.body);
+
+    const { rows } = await query(
+      `SELECT ra.id, ra.status, ra.student_id, ra.slot_id, s.teacher_id, s.weekday,
+              t.track_payments
+         FROM recurring_assignments ra
+         JOIN slots s ON s.id = ra.slot_id
+         JOIN teachers t ON t.id = s.teacher_id
+        WHERE ra.id = $1`,
+      [id],
+    );
+    const ra = rows[0];
+    if (!ra) throw new HttpError(404, 'Weekly spot not found.');
+    if (!ra.track_payments) {
+      throw new HttpError(403, 'This instructor does not track payments.');
+    }
+
+    const isTeacher = req.user.role === 'teacher' && ra.teacher_id === req.user.id;
+    const isStudent = req.user.role === 'student' && ra.student_id === req.user.id;
+    if (!isTeacher && !isStudent) {
+      throw new HttpError(403, 'You cannot update payment for this weekly spot.');
+    }
+    if (ra.status !== 'approved') {
+      throw new HttpError(409, 'This weekly spot is not active.');
+    }
+    if (weekdayOf(date) !== ra.weekday) {
+      throw new HttpError(400, 'That date does not match the lesson day.');
+    }
+
+    const { rows: updated } = await query(
+      `INSERT INTO recurring_lesson_payments (recurring_assignment_id, lesson_date, paid)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (recurring_assignment_id, lesson_date)
+       DO UPDATE SET paid = EXCLUDED.paid
+       RETURNING recurring_assignment_id, lesson_date, paid`,
+      [id, date, paid],
+    );
+    res.json({
+      payment: {
+        recurringId: updated[0].recurring_assignment_id,
+        lessonDate: updated[0].lesson_date instanceof Date
+          ? updated[0].lesson_date.toISOString().slice(0, 10)
+          : updated[0].lesson_date,
+        paid: updated[0].paid === true,
+      },
+    });
+  }),
+);
+
+// Skip a single week of an approved weekly spot. The slot reopens for that
+// date. Allowed for the slot's teacher or the assignment's student.
+recurringRouter.post(
+  '/:id/skip',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const { date } = skipSchema.parse(req.body);
+
+    const { rows } = await query(
+      `SELECT ra.id, ra.status, ra.student_id, ra.slot_id, s.teacher_id, s.weekday
+         FROM recurring_assignments ra
+         JOIN slots s ON s.id = ra.slot_id WHERE ra.id = $1`,
+      [id],
+    );
+    const ra = rows[0];
+    if (!ra) throw new HttpError(404, 'Weekly spot not found.');
+
+    const isTeacher = req.user.role === 'teacher' && ra.teacher_id === req.user.id;
+    const isStudent = req.user.role === 'student' && ra.student_id === req.user.id;
+    if (!isTeacher && !isStudent) {
+      throw new HttpError(403, 'You cannot change this weekly spot.');
+    }
+    if (ra.status !== 'approved') {
+      throw new HttpError(409, 'This weekly spot is not active.');
+    }
+    if (date < todayISO()) {
+      throw new HttpError(400, 'That date is in the past.');
+    }
+    if (weekdayOf(date) !== ra.weekday) {
+      throw new HttpError(400, 'That date does not match the lesson day.');
+    }
+
+    await query(
+      `INSERT INTO slot_exceptions (slot_id, exception_date, kind)
+       VALUES ($1, $2, 'skipped')
+       ON CONFLICT (slot_id, exception_date) DO UPDATE SET kind = 'skipped'`,
+      [ra.slot_id, date],
+    );
+    res.json({ ok: true });
+  }),
+);
+
+// Permanently end a weekly spot (frees the slot every week going forward).
+// Allowed for the slot's teacher or the assignment's student.
+recurringRouter.delete(
+  '/:id',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const { rows } = await query(
+      `SELECT ra.id, ra.status, ra.student_id, s.teacher_id FROM recurring_assignments ra
+         JOIN slots s ON s.id = ra.slot_id WHERE ra.id = $1`,
+      [id],
+    );
+    const ra = rows[0];
+    if (!ra) throw new HttpError(404, 'Weekly spot not found.');
+
+    const isTeacher = req.user.role === 'teacher' && ra.teacher_id === req.user.id;
+    const isStudent = req.user.role === 'student' && ra.student_id === req.user.id;
+    if (!isTeacher && !isStudent) {
+      throw new HttpError(403, 'You cannot remove this weekly spot.');
+    }
+    if (ra.status !== 'approved' && ra.status !== 'pending') {
+      throw new HttpError(409, 'This weekly spot is not active.');
+    }
+
+    await query(
+      "UPDATE recurring_assignments SET status = 'cancelled', decided_at = now() WHERE id = $1",
       [id],
     );
     res.json({ ok: true });

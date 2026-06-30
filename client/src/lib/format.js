@@ -51,8 +51,15 @@ function iso(date) {
   return date.toISOString().slice(0, 10);
 }
 
+function localISO(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 export function todayISO() {
-  return iso(new Date());
+  return localISO(new Date());
 }
 
 export function getMonday(dateStr) {
@@ -77,6 +84,21 @@ export function dateForWeekday(mondayStr, weekday) {
   const monday = parse(mondayStr);
   const offset = weekday === 0 ? 6 : weekday - 1;
   return iso(new Date(monday.getTime() + offset * DAY_MS));
+}
+
+/**
+ * The next `count` dates (YYYY-MM-DD) matching `weekday`, starting from
+ * `fromISO` (today by default). Includes today if it falls on `weekday`.
+ */
+export function upcomingWeekdayDates(weekday, count, fromISO = todayISO()) {
+  const start = parse(fromISO);
+  const startDay = start.getUTCDay();
+  let delta = (weekday - startDay + 7) % 7;
+  const dates = [];
+  for (let i = 0; i < count; i++) {
+    dates.push(iso(new Date(start.getTime() + (delta + i * 7) * DAY_MS)));
+  }
+  return dates;
 }
 
 /** True when a lesson's start date/time is now or in the past (local time). */

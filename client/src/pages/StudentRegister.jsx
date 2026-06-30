@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.jsx';
+import PasswordField from '../components/PasswordField.jsx';
 
 export default function StudentRegister() {
   const { register } = useAuth();
@@ -9,6 +10,7 @@ export default function StudentRegister() {
     fullName: '',
     email: '',
     password: '',
+    confirmPassword: '',
     phone: '',
   });
   const [error, setError] = useState('');
@@ -19,6 +21,10 @@ export default function StudentRegister() {
   const submit = async (e) => {
     e.preventDefault();
     setError('');
+    if (form.password !== form.confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
     setBusy(true);
     try {
       await register({
@@ -49,17 +55,20 @@ export default function StudentRegister() {
           <label>Email</label>
           <input type="email" value={form.email} onChange={update('email')} autoComplete="email" required />
         </div>
-        <div className="field">
-          <label>Password</label>
-          <input
-            type="password"
-            value={form.password}
-            onChange={update('password')}
-            autoComplete="new-password"
-            minLength={8}
-            required
-          />
-        </div>
+        <PasswordField
+          label="Password"
+          value={form.password}
+          onChange={update('password')}
+          minLength={8}
+          required
+        />
+        <PasswordField
+          label="Confirm password"
+          value={form.confirmPassword}
+          onChange={update('confirmPassword')}
+          minLength={8}
+          required
+        />
         <div className="field">
           <label>Phone (optional)</label>
           <input value={form.phone} onChange={update('phone')} autoComplete="tel" />

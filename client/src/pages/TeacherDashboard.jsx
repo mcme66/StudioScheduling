@@ -5,6 +5,7 @@ import { useAuth } from '../auth/AuthContext.jsx';
 import { useToast } from '../components/Toast.jsx';
 import SharePanel from '../components/SharePanel.jsx';
 import PaidToggle from '../components/PaidToggle.jsx';
+import Modal, { ModalOption } from '../components/Modal.jsx';
 import {
   WEEKDAYS,
   fmtTime,
@@ -12,6 +13,7 @@ import {
   fmtDate,
   getMonday,
   addWeeks,
+  dateForWeekday,
   weekRangeLabel,
   todayISO,
 } from '../lib/format.js';
@@ -37,6 +39,7 @@ export default function TeacherDashboard() {
   const baseMonday = getMonday(todayISO());
   const [weekOffset, setWeekOffset] = useState(0);
   const weekStart = addWeeks(baseMonday, weekOffset);
+  const [dialog, setDialog] = useState(null);
 
   const slotsQuery = useQuery({ queryKey: ['slots'], queryFn: () => api('/slots') });
   const scheduleQuery = useQuery({
@@ -94,9 +97,52 @@ export default function TeacherDashboard() {
     onError: (err) => toast(err.message),
   });
 
+  const skipRecurring = useMutation({
+    mutationFn: ({ id, date }) => api(`/recurring/${id}/skip`, { method: 'POST', body: { date } }),
+    onSuccess: () => {
+      toast('Cancelled for that week. The slot has reopened.');
+      invalidateAll();
+    },
+    onError: (err) => toast(err.message),
+  });
+
+  const removeRecurring = useMutation({
+    mutationFn: (id) => api(`/recurring/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      toast('Removed from the weekly slot.');
+      invalidateAll();
+    },
+    onError: (err) => toast(err.message),
+  });
+
+  const blockSlot = useMutation({
+    mutationFn: ({ slotId, date }) => api(`/slots/${slotId}/block`, { method: 'POST', body: { date } }),
+    onSuccess: () => {
+      toast('Slot marked unavailable for that week.');
+      invalidateAll();
+    },
+    onError: (err) => toast(err.message),
+  });
+
+  const dialogBusy =
+    cancelBooking.isPending ||
+    skipRecurring.isPending ||
+    removeRecurring.isPending ||
+    blockSlot.isPending ||
+    removeSlot.isPending;
+
   const paidMutation = useMutation({
     mutationFn: ({ id, paid }) => api(`/bookings/${id}/paid`, { method: 'PATCH', body: { paid } }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['teacher-bookings'] }),
+    onError: (err) => toast(err.message),
+  });
+
+  const recurringPaidMutation = useMutation({
+    mutationFn: ({ id, date, paid }) =>
+      api(`/recurring/${id}/paid`, { method: 'PATCH', body: { date, paid } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['teacher-bookings'] });
+    },
     onError: (err) => toast(err.message),
   });
 
@@ -199,13 +245,15 @@ export default function TeacherDashboard() {
         {bookingsQuery.data && (
           <BookingsList
             data={bookingsQuery.data}
+            weekStart={weekStart}
             trackPayments={bookingsQuery.data.trackPayments}
-            onCancel={(id) => {
-              if (window.confirm('Cancel this booking? The slot will reopen.')) cancelBooking.mutate(id);
-            }}
+            onManageBooking={(b) => setDialog({ type: 'booking', booking: b })}
+            onManageRecurring={(r) => setDialog({ type: 'recurring', recurring: r })}
             onPaidChange={(id, paid) => paidMutation.mutate({ id, paid })}
-            cancelPending={cancelBooking.isPending}
-            paidPending={paidMutation.isPending}
+            onRecurringPaidChange={({ id, date, paid }) =>
+              recurringPaidMutation.mutate({ id, date, paid })
+            }
+            paidPending={paidMutation.isPending || recurringPaidMutation.isPending}
           />
         )}
       </div>
@@ -233,7 +281,7 @@ export default function TeacherDashboard() {
                       type="button"
                       className="chip-x"
                       title="Remove time"
-                      onClick={() => removeSlot.mutate(s.id)}
+                      onClick={() => setDialog({ type: 'deleteSlot', slot: s })}
                     >
                       ✕
                     </button>
@@ -269,30 +317,177 @@ export default function TeacherDashboard() {
         weekLabel={weekRangeLabel(weekStart)}
       />
 
+      {dialog?.type === 'recurring' && (
+        <Modal
+          title={`Cancel ${dialog.recurring.student.name}'s lesson`}
+          subtitle={`${WEEKDAYS[dialog.recurring.weekday]} ${fmtTimeRange(
+            dialog.recurring.startTime,
+            dialog.recurring.durationMin,
+          )} · week of ${weekRangeLabel(weekStart)}`}
+          onClose={() => setDialog(null)}
+        >
+          <ModalOption
+            label="Cancel this week only"
+            description="The student skips this week; the slot reopens for others."
+            disabled={dialogBusy}
+            onClick={() => {
+              skipRecurring.mutate({
+                id: dialog.recurring.id,
+                date: dateForWeekday(weekStart, dialog.recurring.weekday),
+              });
+              setDialog(null);
+            }}
+          />
+          <ModalOption
+            label="Cancel the slot this week"
+            description="Mark this time unavailable this week; nobody can book it."
+            disabled={dialogBusy}
+            onClick={() => {
+              blockSlot.mutate({
+                slotId: dialog.recurring.slotId,
+                date: dateForWeekday(weekStart, dialog.recurring.weekday),
+              });
+              setDialog(null);
+            }}
+          />
+          <ModalOption
+            label="Remove from weekly slot"
+            description="Ends this weekly spot for good and frees the time every week."
+            danger
+            disabled={dialogBusy}
+            onClick={() => {
+              removeRecurring.mutate(dialog.recurring.id);
+              setDialog(null);
+            }}
+          />
+        </Modal>
+      )}
+
+      {dialog?.type === 'booking' && (
+        <Modal
+          title={`Cancel ${dialog.booking.student.name}'s lesson`}
+          subtitle={`${fmtDate(dialog.booking.lessonDate, { weekday: 'long', month: 'short', day: 'numeric' })} · ${fmtTimeRange(
+            dialog.booking.startTime,
+            dialog.booking.durationMin,
+          )}`}
+          onClose={() => setDialog(null)}
+        >
+          <ModalOption
+            label="Cancel this lesson"
+            description="Cancels the booking; the slot reopens for others."
+            disabled={dialogBusy}
+            onClick={() => {
+              cancelBooking.mutate(dialog.booking.id);
+              setDialog(null);
+            }}
+          />
+          <ModalOption
+            label="Cancel the slot this week"
+            description="Mark this time unavailable this week; nobody can book it."
+            disabled={dialogBusy}
+            onClick={() => {
+              blockSlot.mutate({
+                slotId: dialog.booking.slotId,
+                date: dialog.booking.lessonDate,
+              });
+              setDialog(null);
+            }}
+          />
+        </Modal>
+      )}
+
+      {dialog?.type === 'deleteSlot' && (
+        <Modal
+          title="Remove this time permanently?"
+          subtitle={`${SHORT[dialog.slot.weekday]} ${fmtTime(dialog.slot.startTime)} — this cancels all of its lessons and weekly spots.`}
+          onClose={() => setDialog(null)}
+        >
+          <ModalOption
+            label="Delete permanently"
+            description="The time is removed from your weekly schedule for good."
+            danger
+            disabled={dialogBusy}
+            onClick={() => {
+              removeSlot.mutate(dialog.slot.id);
+              setDialog(null);
+            }}
+          />
+          <ModalOption
+            label="Keep it"
+            description="Close without changing anything."
+            disabled={dialogBusy}
+            onClick={() => setDialog(null)}
+          />
+        </Modal>
+      )}
+
     </div>
   );
 }
 
-function BookingsList({ data, trackPayments, onCancel, onPaidChange, cancelPending, paidPending }) {
-  const { bookings, recurring } = data;
+function BookingsList({
+  data,
+  weekStart,
+  trackPayments,
+  onManageBooking,
+  onManageRecurring,
+  onPaidChange,
+  onRecurringPaidChange,
+  paidPending,
+}) {
+  const { bookings, recurring, exceptions = [] } = data;
   if (!bookings.length && !recurring.length) {
     return <p className="muted" style={{ fontSize: '14px' }}>No bookings for this week yet.</p>;
   }
+  const exceptionFor = (slotId, date) =>
+    exceptions.find((e) => e.slotId === slotId && e.date === date)?.kind || null;
   return (
     <>
-      {recurring.map((r) => (
-        <div className="list-row" key={`rec-${r.id}`}>
-          <div className="when">
-            <div className="d">Every {WEEKDAYS[r.weekday]}</div>
-            <div>{fmtTimeRange(r.startTime, r.durationMin)}</div>
+      {recurring.map((r) => {
+        const date = dateForWeekday(weekStart, r.weekday);
+        const exception = exceptionFor(r.slotId, date);
+        return (
+          <div className="list-row" key={`rec-${r.id}`}>
+            <div className="when">
+              <div className="d">Every {WEEKDAYS[r.weekday]}</div>
+              <div>{fmtTimeRange(r.startTime, r.durationMin)}</div>
+            </div>
+            <div className="grow">
+              {r.student.name}
+              <div className="contact">{r.student.email}{r.student.phone ? ` · ${r.student.phone}` : ''}</div>
+            </div>
+            {exception === 'blocked' ? (
+              <span className="pill pill-warn">Unavailable this week</span>
+            ) : exception === 'skipped' ? (
+              <span className="pill pill-warn">Cancelled this week</span>
+            ) : (
+              <div className="row" style={{ gap: '0.4rem' }}>
+                <span className="pill pill-taken">Weekly</span>
+                {trackPayments && (
+                  <PaidToggle
+                    paid={r.paid === true}
+                    disabled={paidPending}
+                    onChange={(paid) =>
+                      onRecurringPaidChange({
+                        id: r.id,
+                        date: r.lessonDate || dateForWeekday(weekStart, r.weekday),
+                        paid,
+                      })
+                    }
+                  />
+                )}
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => onManageRecurring(r)}
+                >
+                  Cancel…
+                </button>
+              </div>
+            )}
           </div>
-          <div className="grow">
-            {r.student.name}
-            <div className="contact">{r.student.email}{r.student.phone ? ` · ${r.student.phone}` : ''}</div>
-          </div>
-          <span className="pill pill-taken">Weekly</span>
-        </div>
-      ))}
+        );
+      })}
       {bookings.map((b) => (
         <div className="list-row" key={b.id}>
           <div className="when">
@@ -314,10 +509,9 @@ function BookingsList({ data, trackPayments, onCancel, onPaidChange, cancelPendi
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              onClick={() => onCancel(b.id)}
-              disabled={cancelPending}
+              onClick={() => onManageBooking(b)}
             >
-              Cancel
+              Cancel…
             </button>
           </div>
         </div>

@@ -18,6 +18,10 @@ export function studentWantsEmail(student) {
   return student?.receive_emails !== false;
 }
 
+export function teacherWantsEmail(teacher) {
+  return teacher?.receive_emails !== false;
+}
+
 function emailFooterText() {
   return ['', `Unsubscribe from emails: ${profileUrl()}`].join('\n');
 }
@@ -126,4 +130,81 @@ export async function sendReminder({ student, teacher, slot, lessonDate }) {
     emailFooterHtml(),
   ].join('');
   await sendEmail({ to: student.email, subject, text, html });
+}
+
+export async function sendPasswordReset({ email, fullName, role, token }) {
+  const resetUrl = `${env.clientUrl}/${role}/reset-password?token=${token}`;
+  const expiresLabel = env.passwordResetExpiresHours === 1
+    ? '1 hour'
+    : `${env.passwordResetExpiresHours} hours`;
+  const subject = 'Reset your password';
+  const text = [
+    `Hi ${fullName},`,
+    '',
+    'We received a request to reset your password.',
+    `Reset your password: ${resetUrl}`,
+    '',
+    'If you did not request this, you can ignore this email.',
+    `This link expires in ${expiresLabel}.`,
+  ].join('\n');
+  const html = [
+    `<p>Hi ${fullName},</p>`,
+    '<p>We received a request to reset your password.</p>',
+    `<p><a href="${resetUrl}">Reset your password</a></p>`,
+    '<p>If you did not request this, you can ignore this email.</p>',
+    `<p style="font-size:13px;color:#666;">This link expires in ${expiresLabel}.</p>`,
+  ].join('');
+  await sendEmail({ to: email, subject, text, html });
+}
+
+function formatLessonDate(dateStr) {
+  const d = new Date(`${dateStr}T12:00:00Z`);
+  return d.toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+function formatLessonLines(lessons, { html }) {
+  if (!lessons.length) {
+    return html ? '<p>No lessons scheduled for today.</p>' : 'No lessons scheduled for today.';
+  }
+  if (html) {
+    const items = lessons.map(
+      (l) => `<li><strong>${formatTime(l.start_time)}</strong> (${l.duration_min} min) — ${l.student_name}</li>`,
+    );
+    return `<ul>${items.join('')}</ul>`;
+  }
+  return lessons
+    .map((l) => `  ${formatTime(l.start_time)} (${l.duration_min} min) — ${l.student_name}`)
+    .join('\n');
+}
+
+export async function sendTeacherDailySchedule({ teacher, lessons, lessonDate }) {
+  if (!teacherWantsEmail(teacher)) return;
+
+  const dateLabel = formatLessonDate(lessonDate);
+  const subject = `Your schedule for ${dateLabel}`;
+  const lessonText = formatLessonLines(lessons, { html: false });
+  const lessonHtml = formatLessonLines(lessons, { html: true });
+  const text = [
+    `Hi ${teacher.full_name},`,
+    '',
+    `Here is your teaching schedule for ${dateLabel}:`,
+    '',
+    lessonText,
+    '',
+    `View your dashboard: ${env.clientUrl}/teacher`,
+  ].join('\n') + emailFooterText();
+  const html = [
+    `<p>Hi ${teacher.full_name},</p>`,
+    `<p>Here is your teaching schedule for <strong>${dateLabel}</strong>:</p>`,
+    lessonHtml,
+    `<p><a href="${env.clientUrl}/teacher">View your dashboard</a></p>`,
+    emailFooterHtml(),
+  ].join('');
+  await sendEmail({ to: teacher.email, subject, text, html });
 }

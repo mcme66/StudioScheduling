@@ -15,6 +15,13 @@ export function toISODate(date) {
   return date.toISOString().slice(0, 10);
 }
 
+function toLocalISODate(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 export function weekdayOf(dateStr) {
   return parseDate(dateStr).getUTCDay();
 }
@@ -40,7 +47,7 @@ export function addWeeks(mondayStr, weeks) {
 }
 
 export function todayISO() {
-  return toISODate(new Date());
+  return toLocalISODate(new Date());
 }
 
 export function isValidDateStr(value) {
@@ -49,11 +56,6 @@ export function isValidDateStr(value) {
 
 /** True when lesson date/time is now or in the past (local server time). */
 export function isLessonPast(lessonDate, startTime) {
-  const today = todayISO();
-  if (lessonDate < today) return true;
-  if (lessonDate > today) return false;
   const t = typeof startTime === 'string' ? startTime.slice(0, 5) : startTime;
-  const [h, m] = t.split(':').map(Number);
-  const now = new Date();
-  return h * 60 + m <= now.getHours() * 60 + now.getMinutes();
+  return new Date(`${lessonDate}T${t}:00`).getTime() <= Date.now();
 }

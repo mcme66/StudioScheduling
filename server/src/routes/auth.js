@@ -1,7 +1,10 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
 import { z } from 'zod';
 import { query } from '../db.js';
+import { env } from '../env.js';
+import { sendPasswordReset } from '../services/email.js';
 import { asyncHandler, HttpError } from '../middleware/error.js';
 import {
   signToken,
@@ -31,6 +34,21 @@ const loginSchema = z.object({
   email: z.string().email().transform((v) => v.toLowerCase().trim()),
   password: z.string().min(1),
 });
+
+const forgotPasswordSchema = z.object({
+  role: z.enum(['student', 'teacher']),
+  email: z.string().email().transform((v) => v.toLowerCase().trim()),
+});
+
+const resetPasswordSchema = z.object({
+  role: z.enum(['student', 'teacher']),
+  token: z.string().min(1),
+  password: z.string().min(8, 'Password must be at least 8 characters.'),
+});
+
+function hashResetToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
 
 function publicUser(row, role) {
   return {
@@ -123,6 +141,70 @@ authRouter.post('/logout', (_req, res) => {
   clearAuthCookie(res);
   res.json({ ok: true });
 });
+
+authRouter.post(
+  '/forgot-password',
+  asyncHandler(async (req, res) => {
+    const data = forgotPasswordSchema.parse(req.body);
+    const table = ROLE_TABLE[data.role];
+    const { rows } = await query(`SELECT id, email, full_name FROM ${table} WHERE email = $1`, [data.email]);
+    const row = rows[0];
+
+    if (row) {
+      const token = crypto.randomBytes(32).toString('hex');
+      const tokenHash = hashResetToken(token);
+      const expiresAt = new Date(Date.now() + env.passwordResetExpiresHours * 60 * 60 * 1000);
+
+      await query(
+        `UPDATE ${table}
+            SET password_reset_token_hash = $1, password_reset_expires_at = $2
+          WHERE id = $3`,
+        [tokenHash, expiresAt.toISOString(), row.id],
+      );
+
+      await sendPasswordReset({
+        email: row.email,
+        fullName: row.full_name,
+        role: data.role,
+        token,
+      });
+    }
+
+    res.json({ message: 'If an account exists for that email, we sent a reset link.' });
+  }),
+);
+
+authRouter.post(
+  '/reset-password',
+  asyncHandler(async (req, res) => {
+    const data = resetPasswordSchema.parse(req.body);
+    const table = ROLE_TABLE[data.role];
+    const tokenHash = hashResetToken(data.token);
+
+    const { rows } = await query(
+      `SELECT id FROM ${table}
+        WHERE password_reset_token_hash = $1
+          AND password_reset_expires_at > now()`,
+      [tokenHash],
+    );
+    const row = rows[0];
+    if (!row) {
+      throw new HttpError(400, 'This reset link is invalid or has expired.');
+    }
+
+    const passwordHash = await bcrypt.hash(data.password, 12);
+    await query(
+      `UPDATE ${table}
+          SET password_hash = $1,
+              password_reset_token_hash = NULL,
+              password_reset_expires_at = NULL
+        WHERE id = $2`,
+      [passwordHash, row.id],
+    );
+
+    res.json({ ok: true });
+  }),
+);
 
 authRouter.get(
   '/me',

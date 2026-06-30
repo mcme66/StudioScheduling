@@ -23,6 +23,10 @@ export const up = (pgm) => {
     default_price_cents: { type: 'integer', notNull: true, default: 7400 },
     default_duration_min: { type: 'integer', notNull: true, default: 45 },
     track_payments: { type: 'boolean', notNull: true, default: false },
+    receive_emails: { type: 'boolean', notNull: true, default: true },
+    password_reset_token_hash: { type: 'text' },
+    password_reset_expires_at: { type: 'timestamptz' },
+    daily_schedule_sent_on: { type: 'date' },
     created_at: { type: 'timestamptz', notNull: true, default: pgm.func('now()') },
   });
 
@@ -53,6 +57,8 @@ export const up = (pgm) => {
     full_name: { type: 'text', notNull: true },
     phone: { type: 'text' },
     receive_emails: { type: 'boolean', notNull: true, default: true },
+    password_reset_token_hash: { type: 'text' },
+    password_reset_expires_at: { type: 'timestamptz' },
     created_at: { type: 'timestamptz', notNull: true, default: pgm.func('now()') },
   });
 
@@ -90,7 +96,7 @@ export const up = (pgm) => {
   pgm.addConstraint(
     'recurring_assignments',
     'recurring_status_valid',
-    "CHECK (status IN ('pending', 'approved', 'declined'))",
+    "CHECK (status IN ('pending', 'approved', 'declined', 'cancelled'))",
   );
   // At most one approved (weekly) student per slot.
   pgm.createIndex('recurring_assignments', ['slot_id'], {
@@ -130,9 +136,38 @@ export const up = (pgm) => {
   });
   pgm.createIndex('bookings', 'student_id');
   pgm.createIndex('bookings', 'lesson_date');
+
+  // --- slot_exceptions (per-week skip / block for a slot) -------------------
+  pgm.createTable('slot_exceptions', {
+    id: 'id',
+    slot_id: { type: 'integer', notNull: true, references: 'slots', onDelete: 'CASCADE' },
+    exception_date: { type: 'date', notNull: true },
+    kind: { type: 'text', notNull: true }, // 'skipped' | 'blocked'
+    created_at: { type: 'timestamptz', notNull: true, default: pgm.func('now()') },
+  });
+  pgm.addConstraint('slot_exceptions', 'slot_exceptions_kind_valid', "CHECK (kind IN ('skipped','blocked'))");
+  pgm.addConstraint('slot_exceptions', 'slot_exceptions_unique', { unique: ['slot_id', 'exception_date'] });
+  pgm.createIndex('slot_exceptions', 'slot_id');
+
+  // --- recurring_lesson_payments (per-week paid flag for weekly spots) ------
+  pgm.createTable('recurring_lesson_payments', {
+    recurring_assignment_id: {
+      type: 'integer',
+      notNull: true,
+      references: 'recurring_assignments',
+      onDelete: 'CASCADE',
+    },
+    lesson_date: { type: 'date', notNull: true },
+    paid: { type: 'boolean', notNull: true, default: false },
+  });
+  pgm.addConstraint('recurring_lesson_payments', 'recurring_lesson_payments_pkey', {
+    primaryKey: ['recurring_assignment_id', 'lesson_date'],
+  });
 };
 
 export const down = (pgm) => {
+  pgm.dropTable('recurring_lesson_payments');
+  pgm.dropTable('slot_exceptions');
   pgm.dropTable('bookings');
   pgm.dropTable('recurring_assignments');
   pgm.dropTable('slots');
