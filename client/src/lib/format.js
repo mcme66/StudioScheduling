@@ -119,3 +119,15 @@ export function maxBookableDate() {
   const monday = addWeeks(getMonday(todayISO()), 2);
   return dateForWeekday(monday, 0);
 }
+
+/** All bookable dates from `fromISO` through max bookable date (inclusive). */
+export function bookableDates(fromISO = todayISO()) {
+  const out = [];
+  const end = parse(maxBookableDate());
+  const cur = parse(fromISO);
+  while (cur.getTime() <= end.getTime()) {
+    out.push(iso(cur));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return out;
+}

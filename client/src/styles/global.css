@@ -783,6 +783,41 @@ a:hover {
 .studio-search {
   margin-bottom: 1.5rem;
 }
+.studio-search-summary {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  user-select: none;
+}
+.studio-search-summary::-webkit-details-marker {
+  display: none;
+}
+.studio-search-summary::after {
+  content: '';
+  flex-shrink: 0;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg);
+  margin-top: -0.15rem;
+  transition: transform 0.15s ease;
+}
+.studio-search[open] .studio-search-summary {
+  margin-bottom: 1rem;
+}
+.studio-search[open] .studio-search-summary::after {
+  transform: rotate(-135deg);
+  margin-top: 0.15rem;
+}
 .studio-search-form {
   display: grid;
   grid-template-columns: 1fr 1fr auto;

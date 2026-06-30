@@ -2,7 +2,13 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../api/client.js';
-import { fmtDate, fmtPrice, fmtTime, fmtTimeRange, maxBookableDate, todayISO } from '../lib/format.js';
+import {
+  bookableDates,
+  fmtDate,
+  fmtPrice,
+  fmtTime,
+  fmtTimeRange,
+} from '../lib/format.js';
 
 const TIME_OPTIONS = (() => {
   const out = [];
@@ -40,8 +46,7 @@ export default function StudioDetail() {
     setSubmitted({ date: searchDate, time: searchTime });
   };
 
-  const minDate = todayISO();
-  const maxDate = maxBookableDate();
+  const dateOptions = bookableDates();
 
   return (
     <div className="container">
@@ -56,23 +61,27 @@ export default function StudioDetail() {
           {data.studio.description && <p className="page-sub">{data.studio.description}</p>}
 
           {data.teachers.length > 0 && (
-            <div className="card studio-search">
-              <div className="section-title">Find a lesson by date &amp; time</div>
+            <details className="card studio-search">
+              <summary className="studio-search-summary">Find a lesson by date &amp; time</summary>
               <p className="muted" style={{ fontSize: '14px', marginBottom: '1rem' }}>
                 Search across all instructors at this studio for an open time slot.
               </p>
               <form className="studio-search-form" onSubmit={runSearch}>
                 <div className="field">
                   <label htmlFor="search-date">Date</label>
-                  <input
+                  <select
                     id="search-date"
-                    type="date"
                     value={searchDate}
-                    min={minDate}
-                    max={maxDate}
                     onChange={(e) => setSearchDate(e.target.value)}
                     required
-                  />
+                  >
+                    <option value="">Select a date</option>
+                    {dateOptions.map((d) => (
+                      <option key={d} value={d}>
+                        {fmtDate(d, { weekday: 'short', month: 'short', day: 'numeric' })}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div className="field">
                   <label htmlFor="search-time">Time</label>
@@ -134,7 +143,7 @@ export default function StudioDetail() {
                   )}
                 </div>
               )}
-            </div>
+            </details>
           )}
 
           {data.teachers.length === 0 && (
