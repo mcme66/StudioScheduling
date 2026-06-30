@@ -63,6 +63,7 @@ export default function StudioDetail() {
           {data.teachers.length > 0 && (
             <details className="card studio-search">
               <summary className="studio-search-summary">Find a lesson by date &amp; time</summary>
+              <div className="studio-search-body">
               <p className="muted" style={{ fontSize: '14px', marginBottom: '1rem' }}>
                 Search across all instructors at this studio for an open time slot.
               </p>
@@ -143,6 +144,7 @@ export default function StudioDetail() {
                   )}
                 </div>
               )}
+              </div>
             </details>
           )}
 

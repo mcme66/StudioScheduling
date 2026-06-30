@@ -782,6 +782,8 @@ a:hover {
 /* Studio availability search */
 .studio-search {
   margin-bottom: 1.5rem;
+  padding: 0;
+  overflow: hidden;
 }
 .studio-search-summary {
   font-size: 12px;
@@ -796,6 +798,7 @@ a:hover {
   justify-content: space-between;
   gap: 0.75rem;
   user-select: none;
+  padding: 1.25rem;
 }
 .studio-search-summary::-webkit-details-marker {
   display: none;
@@ -812,11 +815,14 @@ a:hover {
   transition: transform 0.15s ease;
 }
 .studio-search[open] .studio-search-summary {
-  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--cream);
 }
 .studio-search[open] .studio-search-summary::after {
   transform: rotate(-135deg);
   margin-top: 0.15rem;
+}
+.studio-search-body {
+  padding: 1.25rem;
 }
 .studio-search-form {
   display: grid;
