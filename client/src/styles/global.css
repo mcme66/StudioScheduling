@@ -913,6 +913,38 @@ a.availability-row:hover {
   background: var(--cream);
   color: var(--danger);
 }
+.chip-tag {
+  font-style: normal;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-left: 5px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+.slot-chip-oneoff {
+  border-color: #c7b3e6;
+  background: #f3ecfb;
+}
+.slot-chip-oneoff .chip-tag {
+  background: #6b4fa0;
+  color: #fff;
+}
+.slot-chip-blocked {
+  border-style: dashed;
+  background: var(--cream);
+}
+.slot-chip-blocked .t {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+.slot-chip-blocked .chip-tag {
+  background: #fdeede;
+  color: #a05a00;
+  text-decoration: none;
+}
 .time-add {
   margin-top: 4px;
 }

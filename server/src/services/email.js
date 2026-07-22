@@ -185,6 +185,8 @@ function formatLessonLines(lessons, { html }) {
 
 export async function sendTeacherDailySchedule({ teacher, lessons, lessonDate }) {
   if (!teacherWantsEmail(teacher)) return;
+  // Never send an empty digest: only email on days with lessons.
+  if (!lessons || lessons.length === 0) return;
 
   const dateLabel = formatLessonDate(lessonDate);
   const subject = `Your schedule for ${dateLabel}`;

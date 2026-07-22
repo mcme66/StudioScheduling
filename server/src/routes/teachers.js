@@ -24,6 +24,7 @@ const profileSchema = z.object({
   teachingPolicies: z.string().max(15000).optional().or(z.literal('')),
   trackPayments: z.boolean().optional(),
   receiveEmails: z.boolean().optional(),
+  isActive: z.boolean().optional(),
 });
 
 function mapTeacherProfile(row) {
@@ -39,6 +40,7 @@ function mapTeacherProfile(row) {
     teachingPolicies: row.teaching_policies || null,
     trackPayments: row.track_payments === true,
     receiveEmails: row.receive_emails !== false,
+    isActive: row.is_active !== false,
   };
 }
 
@@ -104,6 +106,7 @@ teachersRouter.patch(
       teachingPolicies: 'teaching_policies',
       trackPayments: 'track_payments',
       receiveEmails: 'receive_emails',
+      isActive: 'is_active',
     };
     const richTextKeys = new Set(['additionalInfo', 'teachingPolicies']);
     const fields = [];
@@ -323,9 +326,13 @@ teachersRouter.get(
       }
     }
 
+    const sunday = dateForWeekday(monday, 0);
     const { rows: slots } = await query(
-      `SELECT * FROM slots WHERE teacher_id = $1 AND active = true ORDER BY weekday, start_time`,
-      [teacherId],
+      `SELECT * FROM slots
+         WHERE teacher_id = $1 AND active = true
+           AND (one_off_date IS NULL OR one_off_date BETWEEN $2 AND $3)
+         ORDER BY weekday, start_time`,
+      [teacherId, monday, sunday],
     );
     const slotIds = slots.map((s) => s.id);
 
@@ -335,7 +342,6 @@ teachersRouter.get(
     let myPending = [];
     let exceptions = [];
     if (slotIds.length) {
-      const sunday = dateForWeekday(monday, 0);
       const [approvedRes, bookedRes, pendingRes, exceptionsRes] = await Promise.all([
         query(
           `SELECT ra.slot_id, ra.student_id, st.full_name

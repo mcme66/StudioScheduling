@@ -41,7 +41,10 @@ export default function TeacherDashboard() {
   const weekStart = addWeeks(baseMonday, weekOffset);
   const [dialog, setDialog] = useState(null);
 
-  const slotsQuery = useQuery({ queryKey: ['slots'], queryFn: () => api('/slots') });
+  const slotsQuery = useQuery({
+    queryKey: ['slots', weekStart],
+    queryFn: () => api(`/slots?week=${weekStart}`),
+  });
   const scheduleQuery = useQuery({
     queryKey: ['teacher-schedule', user.id, weekStart],
     queryFn: () => api(`/teachers/${user.id}/schedule?week=${weekStart}`),
@@ -73,7 +76,17 @@ export default function TeacherDashboard() {
     mutationFn: ({ weekday, startTime }) =>
       api('/slots', { method: 'POST', body: { weekday, startTime } }),
     onSuccess: () => {
-      toast('Time added.');
+      toast('Time added to every week.');
+      invalidateAll();
+    },
+    onError: (err) => toast(err.message),
+  });
+
+  const addSlotThisWeek = useMutation({
+    mutationFn: ({ weekday, startTime, date }) =>
+      api('/slots', { method: 'POST', body: { weekday, startTime, date } }),
+    onSuccess: () => {
+      toast('Time added for this week only.');
       invalidateAll();
     },
     onError: (err) => toast(err.message),
@@ -118,7 +131,17 @@ export default function TeacherDashboard() {
   const blockSlot = useMutation({
     mutationFn: ({ slotId, date }) => api(`/slots/${slotId}/block`, { method: 'POST', body: { date } }),
     onSuccess: () => {
-      toast('Slot marked unavailable for that week.');
+      toast('Time removed for this week only.');
+      invalidateAll();
+    },
+    onError: (err) => toast(err.message),
+  });
+
+  const unblockSlot = useMutation({
+    mutationFn: ({ slotId, date }) =>
+      api(`/slots/${slotId}/exceptions`, { method: 'DELETE', body: { date } }),
+    onSuccess: () => {
+      toast('Time restored for this week.');
       invalidateAll();
     },
     onError: (err) => toast(err.message),
@@ -129,6 +152,9 @@ export default function TeacherDashboard() {
     skipRecurring.isPending ||
     removeRecurring.isPending ||
     blockSlot.isPending ||
+    unblockSlot.isPending ||
+    addSlot.isPending ||
+    addSlotThisWeek.isPending ||
     removeSlot.isPending;
 
   const paidMutation = useMutation({
@@ -261,6 +287,10 @@ export default function TeacherDashboard() {
       {/* Slot management grid */}
       <div className="card">
         <div className="section-title">Weekly lesson times</div>
+        <p className="muted" style={{ fontSize: '12px', marginTop: '-4px', marginBottom: '10px' }}>
+          Showing the week of {weekRangeLabel(weekStart)}. Use “this week only” to adjust just this
+          week without changing your normal schedule.
+        </p>
         <div className="day-grid">
           {DISPLAY_ORDER.map((wd) => {
             const slots = slotsByDay.get(wd) || [];
@@ -274,25 +304,37 @@ export default function TeacherDashboard() {
                     None
                   </span>
                 )}
-                {slots.map((s) => (
-                  <div className="slot-chip" key={s.id}>
-                    <span className="t">{fmtTime(s.startTime)}</span>
-                    <button
-                      type="button"
-                      className="chip-x"
-                      title="Remove time"
-                      onClick={() => setDialog({ type: 'deleteSlot', slot: s })}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
+                {slots.map((s) => {
+                  const tag = s.oneOffDate ? 'this week' : s.blockedThisWeek ? 'off' : null;
+                  const cls = s.oneOffDate
+                    ? 'slot-chip slot-chip-oneoff'
+                    : s.blockedThisWeek
+                      ? 'slot-chip slot-chip-blocked'
+                      : 'slot-chip';
+                  return (
+                    <div className={cls} key={s.id}>
+                      <span className="t">
+                        {fmtTime(s.startTime)}
+                        {tag && <em className="chip-tag">{tag}</em>}
+                      </span>
+                      <button
+                        type="button"
+                        className="chip-x"
+                        title="Manage time"
+                        onClick={() => setDialog({ type: 'deleteSlot', slot: s })}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  );
+                })}
                 {available.length > 0 && (
                   <div className="time-add">
                     <select
                       value=""
                       onChange={(e) => {
-                        if (e.target.value) addSlot.mutate({ weekday: wd, startTime: e.target.value });
+                        if (e.target.value)
+                          setDialog({ type: 'addSlot', weekday: wd, startTime: e.target.value });
                       }}
                     >
                       <option value="">+ Add time</option>
@@ -396,30 +438,163 @@ export default function TeacherDashboard() {
         </Modal>
       )}
 
-      {dialog?.type === 'deleteSlot' && (
-        <Modal
-          title="Remove this time permanently?"
-          subtitle={`${SHORT[dialog.slot.weekday]} ${fmtTime(dialog.slot.startTime)} — this cancels all of its lessons and weekly spots.`}
-          onClose={() => setDialog(null)}
-        >
-          <ModalOption
-            label="Delete permanently"
-            description="The time is removed from your weekly schedule for good."
-            danger
-            disabled={dialogBusy}
-            onClick={() => {
-              removeSlot.mutate(dialog.slot.id);
-              setDialog(null);
-            }}
-          />
-          <ModalOption
-            label="Keep it"
-            description="Close without changing anything."
-            disabled={dialogBusy}
-            onClick={() => setDialog(null)}
-          />
-        </Modal>
-      )}
+      {dialog?.type === 'addSlot' &&
+        (() => {
+          const date = dateForWeekday(weekStart, dialog.weekday);
+          const past = date < todayISO();
+          return (
+            <Modal
+              title={`Add ${SHORT[dialog.weekday]} ${fmtTime(dialog.startTime)}`}
+              subtitle={`Week of ${weekRangeLabel(weekStart)}`}
+              onClose={() => setDialog(null)}
+            >
+              <ModalOption
+                label="Add weekly"
+                description="Adds this time to your schedule every week."
+                disabled={dialogBusy}
+                onClick={() => {
+                  addSlot.mutate({ weekday: dialog.weekday, startTime: dialog.startTime });
+                  setDialog(null);
+                }}
+              />
+              <ModalOption
+                label="Add this week only"
+                description={
+                  past
+                    ? 'That day has already passed this week.'
+                    : `Adds this time only for the week of ${weekRangeLabel(weekStart)}.`
+                }
+                disabled={dialogBusy || past}
+                onClick={() => {
+                  addSlotThisWeek.mutate({
+                    weekday: dialog.weekday,
+                    startTime: dialog.startTime,
+                    date,
+                  });
+                  setDialog(null);
+                }}
+              />
+              <ModalOption
+                label="Cancel"
+                description="Close without adding anything."
+                disabled={dialogBusy}
+                onClick={() => setDialog(null)}
+              />
+            </Modal>
+          );
+        })()}
+
+      {dialog?.type === 'deleteSlot' &&
+        (() => {
+          const slot = dialog.slot;
+          const date = dateForWeekday(weekStart, slot.weekday);
+          const past = date < todayISO();
+
+          // One-off ("this week only") slot: it only exists this week, so
+          // removing it simply deletes it.
+          if (slot.oneOffDate) {
+            return (
+              <Modal
+                title="Remove this one-time lesson?"
+                subtitle={`${SHORT[slot.weekday]} ${fmtTime(slot.startTime)} · this week only`}
+                onClose={() => setDialog(null)}
+              >
+                <ModalOption
+                  label="Delete this week only"
+                  description="Removes this one-time lesson time and cancels any lesson on it."
+                  danger
+                  disabled={dialogBusy}
+                  onClick={() => {
+                    removeSlot.mutate(slot.id);
+                    setDialog(null);
+                  }}
+                />
+                <ModalOption
+                  label="Keep it"
+                  description="Close without changing anything."
+                  disabled={dialogBusy}
+                  onClick={() => setDialog(null)}
+                />
+              </Modal>
+            );
+          }
+
+          // Recurring slot already removed for this week: offer to restore it.
+          if (slot.blockedThisWeek) {
+            return (
+              <Modal
+                title="This time is removed for this week"
+                subtitle={`${SHORT[slot.weekday]} ${fmtTime(slot.startTime)} · week of ${weekRangeLabel(weekStart)}`}
+                onClose={() => setDialog(null)}
+              >
+                <ModalOption
+                  label="Restore this week"
+                  description="Makes this time available again for this week."
+                  disabled={dialogBusy}
+                  onClick={() => {
+                    unblockSlot.mutate({ slotId: slot.id, date });
+                    setDialog(null);
+                  }}
+                />
+                <ModalOption
+                  label="Delete permanently"
+                  description="Removes this time from every week and cancels all of its lessons and weekly spots."
+                  danger
+                  disabled={dialogBusy}
+                  onClick={() => {
+                    removeSlot.mutate(slot.id);
+                    setDialog(null);
+                  }}
+                />
+                <ModalOption
+                  label="Keep it"
+                  description="Close without changing anything."
+                  disabled={dialogBusy}
+                  onClick={() => setDialog(null)}
+                />
+              </Modal>
+            );
+          }
+
+          // Normal recurring slot.
+          return (
+            <Modal
+              title="Remove this time?"
+              subtitle={`${SHORT[slot.weekday]} ${fmtTime(slot.startTime)}`}
+              onClose={() => setDialog(null)}
+            >
+              <ModalOption
+                label="Delete permanently"
+                description="Removes this time from every week and cancels all of its lessons and weekly spots."
+                danger
+                disabled={dialogBusy}
+                onClick={() => {
+                  removeSlot.mutate(slot.id);
+                  setDialog(null);
+                }}
+              />
+              <ModalOption
+                label="Delete this week only"
+                description={
+                  past
+                    ? 'That day has already passed this week.'
+                    : `Removes it only for the week of ${weekRangeLabel(weekStart)}; your normal schedule is unchanged.`
+                }
+                disabled={dialogBusy || past}
+                onClick={() => {
+                  blockSlot.mutate({ slotId: slot.id, date });
+                  setDialog(null);
+                }}
+              />
+              <ModalOption
+                label="Keep it"
+                description="Close without changing anything."
+                disabled={dialogBusy}
+                onClick={() => setDialog(null)}
+              />
+            </Modal>
+          );
+        })()}
 
     </div>
   );

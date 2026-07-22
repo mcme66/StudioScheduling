@@ -37,6 +37,7 @@ export default function Profile() {
     phone: '',
     receiveEmails: true,
     trackPayments: false,
+    isActive: true,
     bio: '',
     defaultPrice: '74',
     defaultDurationMin: '45',
@@ -52,6 +53,7 @@ export default function Profile() {
         fullName: t.fullName || '',
         phone: t.phone || '',
         receiveEmails: t.receiveEmails !== false,
+        isActive: t.isActive !== false,
         bio: t.bio || '',
         trackPayments: t.trackPayments === true,
         defaultPrice: String((t.defaultPriceCents || 7400) / 100),
@@ -92,6 +94,7 @@ export default function Profile() {
             defaultDurationMin: Number(form.defaultDurationMin || 45),
             trackPayments: form.trackPayments,
             receiveEmails: form.receiveEmails,
+            isActive: form.isActive,
           },
         });
 
@@ -182,6 +185,27 @@ export default function Profile() {
 
           {isTeacher && (
             <>
+              <div className={`recurring-toggle${form.isActive ? ' active' : ''}`}>
+                <div
+                  className="recurring-toggle-row"
+                  onClick={() => setForm((f) => ({ ...f, isActive: !f.isActive }))}
+                >
+                  <div className="recurring-toggle-label">
+                    <strong>Active</strong>
+                    <span>
+                      {form.isActive
+                        ? 'Your schedule is listed on the studio page.'
+                        : 'You are hidden from the studio page. Your profile and dashboard still work.'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className={`switch${form.isActive ? ' on' : ''}`}
+                    aria-pressed={form.isActive}
+                    aria-label="Toggle studio listing"
+                  />
+                </div>
+              </div>
               <div className={`recurring-toggle${form.receiveEmails ? ' active' : ''}`}>
                 <div
                   className="recurring-toggle-row"

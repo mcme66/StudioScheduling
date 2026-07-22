@@ -40,9 +40,10 @@ studiosRouter.get(
   asyncHandler(async (_req, res) => {
     const { rows } = await query(
       `SELECT s.id, s.name, s.slug, s.description,
-              COUNT(DISTINCT ts.teacher_id) AS instructor_count
+              COUNT(DISTINCT t.id) AS instructor_count
          FROM studios s
          LEFT JOIN teacher_studios ts ON ts.studio_id = s.id
+         LEFT JOIN teachers t ON t.id = ts.teacher_id AND t.is_active
         GROUP BY s.id
         ORDER BY s.name`,
     );
@@ -93,8 +94,10 @@ studiosRouter.get(
          JOIN teachers t ON t.id = s.teacher_id
          JOIN teacher_studios ts ON ts.teacher_id = t.id AND ts.studio_id = $1
         WHERE s.active = true
+          AND t.is_active
           AND s.weekday = $2
           AND s.start_time = $3::time
+          AND (s.one_off_date IS NULL OR s.one_off_date = $4::date)
           AND NOT EXISTS (
             SELECT 1 FROM recurring_assignments ra
              WHERE ra.slot_id = s.id AND ra.status = 'approved'
@@ -132,9 +135,10 @@ studiosRouter.get(
   asyncHandler(async (req, res) => {
     const { rows: studioRows } = await query(
       `SELECT s.id, s.name, s.slug, s.description,
-              COUNT(DISTINCT ts.teacher_id) AS instructor_count
+              COUNT(DISTINCT t.id) AS instructor_count
          FROM studios s
          LEFT JOIN teacher_studios ts ON ts.studio_id = s.id
+         LEFT JOIN teachers t ON t.id = ts.teacher_id AND t.is_active
         WHERE s.slug = $1
         GROUP BY s.id`,
       [req.params.slug],
@@ -144,11 +148,12 @@ studiosRouter.get(
 
     const { rows: teachers } = await query(
       `SELECT t.id, t.full_name, t.bio, t.default_price_cents, t.default_duration_min,
-              COUNT(sl.id) FILTER (WHERE sl.active) AS active_slots
+              COUNT(sl.id) FILTER (WHERE sl.active AND sl.one_off_date IS NULL) AS active_slots
          FROM teachers t
          JOIN teacher_studios ts ON ts.teacher_id = t.id
          LEFT JOIN slots sl ON sl.teacher_id = t.id
         WHERE ts.studio_id = $1
+          AND t.is_active
         GROUP BY t.id
         ORDER BY t.full_name`,
       [studio.id],

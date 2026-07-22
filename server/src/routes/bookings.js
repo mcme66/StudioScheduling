@@ -49,6 +49,11 @@ bookingsRouter.post(
         throw new HttpError(400, 'That date does not match the lesson day.');
       }
 
+      // A one-off ("this week only") slot can only be booked on its date.
+      if (slot.one_off_date && fmtDate(slot.one_off_date) !== lessonDate) {
+        throw new HttpError(404, 'That lesson time is not available.');
+      }
+
       const { rows: excRows } = await client.query(
         'SELECT kind FROM slot_exceptions WHERE slot_id = $1 AND exception_date = $2',
         [slotId, lessonDate],

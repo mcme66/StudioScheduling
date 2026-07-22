@@ -77,12 +77,15 @@ export async function runTeacherDailySchedule(now = new Date()) {
   for (const teacher of teachers) {
     if (teacher.receive_emails !== false) {
       const lessons = await fetchLessonsForTeacher(teacher.id, lessonDate, weekday);
-      await sendTeacherDailySchedule({
-        teacher,
-        lessons,
-        lessonDate,
-      });
-      sent += 1;
+      // Only send the digest on days the teacher actually has lessons.
+      if (lessons.length > 0) {
+        await sendTeacherDailySchedule({
+          teacher,
+          lessons,
+          lessonDate,
+        });
+        sent += 1;
+      }
     }
     await query(
       'UPDATE teachers SET daily_schedule_sent_on = $1::date WHERE id = $2',
