@@ -430,6 +430,7 @@ teachersRouter.get(
         lessonDate,
         status,
         mine,
+        oneOff: s.one_off_date != null,
         recurringPendingMine: pendingSet.has(s.id),
       };
     });

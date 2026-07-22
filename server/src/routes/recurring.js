@@ -32,11 +32,17 @@ recurringRouter.post(
     const { slotId } = requestSchema.parse(req.body);
 
     const { rows: slotRows } = await query(
-      'SELECT id, active FROM slots WHERE id = $1',
+      'SELECT id, active, one_off_date FROM slots WHERE id = $1',
       [slotId],
     );
     if (!slotRows[0] || !slotRows[0].active) {
       throw new HttpError(404, 'That lesson time is not available.');
+    }
+    if (slotRows[0].one_off_date) {
+      throw new HttpError(
+        400,
+        'Weekly time slots cannot be requested for this lesson slot because this is a temporary slot.',
+      );
     }
 
     const { rows: approvedRows } = await query(

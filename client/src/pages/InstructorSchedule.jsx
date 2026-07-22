@@ -229,7 +229,10 @@ export default function InstructorSchedule() {
                 >
                   <div className="slot-dot" />
                   <div className="slot-info">
-                    <div className="slot-time">{fmtTimeRange(slot.startTime, slot.durationMin)}</div>
+                    <div className="slot-time">
+                      {fmtTimeRange(slot.startTime, slot.durationMin)}
+                      {slot.oneOff && <span className="slot-oneoff-tag">Temporary</span>}
+                    </div>
                     <div className="slot-meta">
                       {slot.durationMin} min · {fmtPrice(slot.priceCents)}
                     </div>
@@ -265,20 +268,30 @@ export default function InstructorSchedule() {
             {fmtTimeRange(selected.startTime, selected.durationMin)}
           </p>
 
-          <div className={`recurring-toggle${wantsRecurring ? ' active' : ''}`}>
-            <div className="recurring-toggle-row" onClick={() => setWantsRecurring((v) => !v)}>
-              <div className="recurring-toggle-label">
-                <strong>Make this a weekly spot</strong>
-                <span>Request this same time every week</span>
-              </div>
-              <button
-                type="button"
-                className={`switch${wantsRecurring ? ' on' : ''}`}
-                aria-pressed={wantsRecurring}
-                aria-label="Toggle weekly spot"
-              />
+          {selected.oneOff ? (
+            <div className="recurring-locked" role="note">
+              <span className="recurring-locked-icon" aria-hidden="true">🔒</span>
+              <span>
+                Weekly time slots cannot be requested for this lessons slot because this is a
+                temporary slot.
+              </span>
             </div>
-          </div>
+          ) : (
+            <div className={`recurring-toggle${wantsRecurring ? ' active' : ''}`}>
+              <div className="recurring-toggle-row" onClick={() => setWantsRecurring((v) => !v)}>
+                <div className="recurring-toggle-label">
+                  <strong>Make this a weekly spot</strong>
+                  <span>Request this same time every week</span>
+                </div>
+                <button
+                  type="button"
+                  className={`switch${wantsRecurring ? ' on' : ''}`}
+                  aria-pressed={wantsRecurring}
+                  aria-label="Toggle weekly spot"
+                />
+              </div>
+            </div>
+          )}
 
           <div className="row" style={{ gap: '0.6rem' }}>
             <button

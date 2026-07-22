@@ -578,7 +578,7 @@ export default function TeacherDashboard() {
                 description={
                   past
                     ? 'That day has already passed this week.'
-                    : `Removes it only for the week of ${weekRangeLabel(weekStart)}; your normal schedule is unchanged.`
+                    : `Removes it only for the week of ${weekRangeLabel(weekStart)} and cancels anyone booked that week; your normal schedule is unchanged.`
                 }
                 disabled={dialogBusy || past}
                 onClick={() => {
