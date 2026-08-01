@@ -17,7 +17,12 @@ async function fetchLessonsForTeacher(teacherId, lessonDate, weekday) {
   const { rows } = await query(
     `SELECT start_time, duration_min, student_name
        FROM (
-         SELECT s.start_time, s.duration_min, st.full_name AS student_name
+         SELECT s.start_time, s.duration_min,
+                CASE
+                  WHEN b.child_name IS NOT NULL AND b.child_name <> ''
+                    THEN b.child_name || ' (parent: ' || st.full_name || ')'
+                  ELSE st.full_name
+                END AS student_name
            FROM bookings b
            JOIN slots s ON s.id = b.slot_id
            JOIN students st ON st.id = b.student_id
@@ -31,13 +36,20 @@ async function fetchLessonsForTeacher(teacherId, lessonDate, weekday) {
                  AND se.kind = 'blocked'
             )
          UNION
-         SELECT s.start_time, s.duration_min, st.full_name AS student_name
+         SELECT s.start_time, s.duration_min,
+                CASE
+                  WHEN ra.child_name IS NOT NULL AND ra.child_name <> ''
+                    THEN ra.child_name || ' (parent: ' || st.full_name || ')'
+                  ELSE st.full_name
+                END AS student_name
            FROM recurring_assignments ra
            JOIN slots s ON s.id = ra.slot_id
            JOIN students st ON st.id = ra.student_id
           WHERE s.teacher_id = $1
             AND ra.status = 'approved'
             AND s.weekday = $3
+            AND (s.series_start_date IS NULL OR s.series_start_date <= $2::date)
+            AND (s.series_end_date IS NULL OR s.series_end_date >= $2::date)
             AND NOT EXISTS (
               SELECT 1 FROM bookings b
                WHERE b.slot_id = s.id

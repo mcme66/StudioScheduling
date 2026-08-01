@@ -3,7 +3,13 @@ import { z } from 'zod';
 import { query, withTransaction } from '../db.js';
 import { asyncHandler, HttpError } from '../middleware/error.js';
 import { requireRole } from '../middleware/auth.js';
-import { getMonday, dateForWeekday, isValidDateStr, todayISO } from '../utils/week.js';
+import {
+  getMonday,
+  dateForWeekday,
+  isValidDateStr,
+  todayISO,
+  isDateInSeries,
+} from '../utils/week.js';
 import { getTeacherStudios, teacherListedAtStudio } from '../utils/teacherStudios.js';
 import { sanitizeRichText } from '../utils/sanitizeHtml.js';
 
@@ -149,7 +155,7 @@ teachersRouter.get(
     }
 
     const { rows: bookings } = await query(
-      `SELECT b.id, b.lesson_date, b.created_at, b.status, b.paid, b.slot_id,
+      `SELECT b.id, b.lesson_date, b.created_at, b.status, b.paid, b.slot_id, b.child_name,
               s.weekday, s.start_time, s.duration_min, s.price_cents,
               st.full_name AS student_name, st.email AS student_email, st.phone AS student_phone
          FROM bookings b
@@ -185,7 +191,7 @@ teachersRouter.get(
     }
 
     const { rows: recurring } = await query(
-      `SELECT ra.id, s.id AS slot_id, s.weekday, s.start_time, s.duration_min,
+      `SELECT ra.id, ra.child_name, s.id AS slot_id, s.weekday, s.start_time, s.duration_min,
               st.full_name AS student_name, st.email AS student_email, st.phone AS student_phone
          FROM recurring_assignments ra
          JOIN slots s ON s.id = ra.slot_id
@@ -232,7 +238,12 @@ teachersRouter.get(
         durationMin: b.duration_min,
         priceCents: b.price_cents,
         paid: b.paid === true,
-        student: { name: b.student_name, email: b.student_email, phone: b.student_phone },
+        student: {
+          name: b.student_name,
+          email: b.student_email,
+          phone: b.student_phone,
+          childName: b.child_name || null,
+        },
       })),
       recurring: recurring.map((r) => {
         const lessonDate = weekRange ? dateForWeekday(weekRange.monday, r.weekday) : null;
@@ -246,7 +257,12 @@ teachersRouter.get(
           paid: lessonDate
             ? recurringPayments.get(`${r.id}:${lessonDate}`) === true
             : false,
-          student: { name: r.student_name, email: r.student_email, phone: r.student_phone },
+          student: {
+            name: r.student_name,
+            email: r.student_email,
+            phone: r.student_phone,
+            childName: r.child_name || null,
+          },
         };
       }),
     });
@@ -327,13 +343,29 @@ teachersRouter.get(
     }
 
     const sunday = dateForWeekday(monday, 0);
-    const { rows: slots } = await query(
+    const { rows: slotRows } = await query(
       `SELECT * FROM slots
          WHERE teacher_id = $1 AND active = true
-           AND (one_off_date IS NULL OR one_off_date BETWEEN $2 AND $3)
+           AND (
+             (one_off_date IS NOT NULL AND one_off_date BETWEEN $2 AND $3)
+             OR (
+               one_off_date IS NULL
+               AND (series_start_date IS NULL OR series_start_date <= $3)
+               AND (series_end_date IS NULL OR series_end_date >= $2)
+             )
+           )
          ORDER BY weekday, start_time`,
       [teacherId, monday, sunday],
     );
+    const slots = slotRows.filter((s) => {
+      if (s.one_off_date != null) return true;
+      const lessonDate = dateForWeekday(monday, s.weekday);
+      return isDateInSeries(
+        lessonDate,
+        s.series_start_date ? fmtDate(s.series_start_date) : null,
+        s.series_end_date ? fmtDate(s.series_end_date) : null,
+      );
+    });
     const slotIds = slots.map((s) => s.id);
 
     let approved = [];

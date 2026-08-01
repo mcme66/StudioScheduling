@@ -46,6 +46,32 @@ export function addWeeks(mondayStr, weeks) {
   return toISODate(new Date(monday.getTime() + weeks * 7 * DAY_MS));
 }
 
+/** Add (or subtract) whole days from a YYYY-MM-DD date string. */
+export function addDays(dateStr, days) {
+  const d = parseDate(dateStr);
+  return toISODate(new Date(d.getTime() + days * DAY_MS));
+}
+
+/**
+ * Last date on or before `untilDate` that falls on `weekday` (0=Sun..6=Sat).
+ * Returns null if none can be found (should not happen for valid inputs).
+ */
+export function lastWeekdayOnOrBefore(untilDate, weekday) {
+  const d = parseDate(untilDate);
+  for (let i = 0; i < 7; i++) {
+    const candidate = new Date(d.getTime() - i * DAY_MS);
+    if (candidate.getUTCDay() === weekday) return toISODate(candidate);
+  }
+  return null;
+}
+
+/** Whether a lesson date falls inside a weekly slot's optional series bounds. */
+export function isDateInSeries(lessonDate, seriesStartDate, seriesEndDate) {
+  if (seriesStartDate && lessonDate < seriesStartDate) return false;
+  if (seriesEndDate && lessonDate > seriesEndDate) return false;
+  return true;
+}
+
 export function todayISO() {
   return toLocalISODate(new Date());
 }

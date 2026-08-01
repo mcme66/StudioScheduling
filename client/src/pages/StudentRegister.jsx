@@ -2,26 +2,25 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.jsx';
 import PasswordField from '../components/PasswordField.jsx';
+import { formValues } from '../lib/form.js';
 
 export default function StudentRegister() {
   const { register } = useAuth();
   const navigate = useNavigate();
-  const [form, setForm] = useState({
-    fullName: '',
-    email: '',
-    password: '',
-    confirmPassword: '',
-    phone: '',
-  });
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-
-  const update = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
 
   const submit = async (e) => {
     e.preventDefault();
     setError('');
-    if (form.password !== form.confirmPassword) {
+    const { password, confirmPassword, email, fullName, phone } = formValues(e, [
+      'password',
+      'confirmPassword',
+      'email',
+      'fullName',
+      'phone',
+    ]);
+    if (password !== confirmPassword) {
       setError('Passwords do not match.');
       return;
     }
@@ -29,10 +28,10 @@ export default function StudentRegister() {
     try {
       await register({
         role: 'student',
-        fullName: form.fullName,
-        email: form.email,
-        password: form.password,
-        phone: form.phone || undefined,
+        fullName,
+        email,
+        password,
+        phone: phone || undefined,
       });
       navigate('/', { replace: true });
     } catch (err) {
@@ -46,32 +45,43 @@ export default function StudentRegister() {
       <h1 className="page-title">Create student account</h1>
       <p className="page-sub">Register to book lessons at your favorite studios.</p>
 
-      <form className="card" onSubmit={submit}>
+      <form className="card" onSubmit={submit} method="post">
         <div className="field">
-          <label>Full name</label>
-          <input value={form.fullName} onChange={update('fullName')} required />
+          <label htmlFor="student-register-name">Full name</label>
+          <input
+            id="student-register-name"
+            name="fullName"
+            autoComplete="name"
+            required
+          />
         </div>
         <div className="field">
-          <label>Email</label>
-          <input type="email" value={form.email} onChange={update('email')} autoComplete="email" required />
+          <label htmlFor="student-register-email">Email</label>
+          <input
+            id="student-register-email"
+            name="email"
+            type="email"
+            autoComplete="username"
+            required
+          />
         </div>
         <PasswordField
           label="Password"
-          value={form.password}
-          onChange={update('password')}
+          name="password"
+          autoComplete="new-password"
           minLength={8}
           required
         />
         <PasswordField
           label="Confirm password"
-          value={form.confirmPassword}
-          onChange={update('confirmPassword')}
+          name="confirmPassword"
+          autoComplete="new-password"
           minLength={8}
           required
         />
         <div className="field">
-          <label>Phone (optional)</label>
-          <input value={form.phone} onChange={update('phone')} autoComplete="tel" />
+          <label htmlFor="student-register-phone">Phone (optional)</label>
+          <input id="student-register-phone" name="phone" autoComplete="tel" />
         </div>
 
         {error && <p className="error-text">{error}</p>}

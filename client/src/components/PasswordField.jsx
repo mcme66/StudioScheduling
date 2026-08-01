@@ -1,16 +1,21 @@
 import { useState } from 'react';
 
+/**
+ * Uncontrolled password input so browser / Google Password Manager autofill
+ * and generated passwords are preserved in the DOM (React controlled value=
+ * often stays empty when autofill skips onChange).
+ */
 export default function PasswordField({
   label,
-  value,
-  onChange,
+  name,
   autoComplete = 'new-password',
   minLength,
   required = false,
   id,
+  defaultValue = '',
 }) {
   const [visible, setVisible] = useState(false);
-  const inputId = id || label.toLowerCase().replace(/\s+/g, '-');
+  const inputId = id || name || label.toLowerCase().replace(/\s+/g, '-');
 
   return (
     <div className="field">
@@ -18,9 +23,9 @@ export default function PasswordField({
       <div className="password-input-wrap">
         <input
           id={inputId}
+          name={name}
           type={visible ? 'text' : 'password'}
-          value={value}
-          onChange={onChange}
+          defaultValue={defaultValue}
           autoComplete={autoComplete}
           minLength={minLength}
           required={required}
@@ -31,6 +36,7 @@ export default function PasswordField({
           onClick={() => setVisible((v) => !v)}
           aria-label={visible ? 'Hide password' : 'Show password'}
           aria-pressed={visible}
+          tabIndex={-1}
         >
           {visible ? 'Hide' : 'Show'}
         </button>

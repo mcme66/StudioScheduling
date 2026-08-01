@@ -36,6 +36,8 @@ export default function Profile() {
     fullName: '',
     phone: '',
     receiveEmails: true,
+    isParent: false,
+    childrenNames: [''],
     trackPayments: false,
     isActive: true,
     bio: '',
@@ -53,6 +55,8 @@ export default function Profile() {
         fullName: t.fullName || '',
         phone: t.phone || '',
         receiveEmails: t.receiveEmails !== false,
+        isParent: false,
+        childrenNames: [''],
         isActive: t.isActive !== false,
         bio: t.bio || '',
         trackPayments: t.trackPayments === true,
@@ -62,11 +66,14 @@ export default function Profile() {
       });
     } else if (!isTeacher && studentQuery.data?.student) {
       const s = studentQuery.data.student;
+      const names = Array.isArray(s.childrenNames) ? s.childrenNames.filter(Boolean) : [];
       setForm((f) => ({
         ...f,
         fullName: s.fullName || '',
         phone: s.phone || '',
         receiveEmails: s.receiveEmails !== false,
+        isParent: s.isParent === true,
+        childrenNames: names.length ? [...names, ''] : [''],
       }));
     }
   }, [isTeacher, teacherQuery.data, studentQuery.data, myStudiosQuery.data]);
@@ -108,6 +115,10 @@ export default function Profile() {
             fullName: form.fullName,
             phone: form.phone || '',
             receiveEmails: form.receiveEmails,
+            isParent: form.isParent,
+            childrenNames: form.isParent
+              ? form.childrenNames.map((n) => n.trim()).filter(Boolean)
+              : [],
           },
         });
       }
@@ -116,6 +127,7 @@ export default function Profile() {
       toast('Profile saved.');
       setError('');
       await refresh();
+      await studentQuery.refetch();
       navigate('/');
     },
     onError: (err) => {
@@ -164,23 +176,88 @@ export default function Profile() {
           </div>
 
           {!isTeacher && (
-            <div className={`recurring-toggle${form.receiveEmails ? ' active' : ''}`}>
-              <div
-                className="recurring-toggle-row"
-                onClick={() => setForm((f) => ({ ...f, receiveEmails: !f.receiveEmails }))}
-              >
-                <div className="recurring-toggle-label">
-                  <strong>Receive emails?</strong>
-                  <span>Booking confirmations and lesson reminders</span>
+            <>
+              <div className={`recurring-toggle${form.receiveEmails ? ' active' : ''}`}>
+                <div
+                  className="recurring-toggle-row"
+                  onClick={() => setForm((f) => ({ ...f, receiveEmails: !f.receiveEmails }))}
+                >
+                  <div className="recurring-toggle-label">
+                    <strong>Receive emails?</strong>
+                    <span>Booking confirmations and lesson reminders</span>
+                  </div>
+                  <button
+                    type="button"
+                    className={`switch${form.receiveEmails ? ' on' : ''}`}
+                    aria-pressed={form.receiveEmails}
+                    aria-label="Toggle email notifications"
+                  />
                 </div>
-                <button
-                  type="button"
-                  className={`switch${form.receiveEmails ? ' on' : ''}`}
-                  aria-pressed={form.receiveEmails}
-                  aria-label="Toggle email notifications"
-                />
               </div>
-            </div>
+
+              <div className={`recurring-toggle${form.isParent ? ' active' : ''}`}>
+                <div
+                  className="recurring-toggle-row"
+                  onClick={() =>
+                    setForm((f) => ({
+                      ...f,
+                      isParent: !f.isParent,
+                      childrenNames: !f.isParent
+                        ? f.childrenNames?.length
+                          ? f.childrenNames
+                          : ['']
+                        : f.childrenNames,
+                    }))
+                  }
+                >
+                  <div className="recurring-toggle-label">
+                    <strong>Parent account</strong>
+                    <span>Book lessons for your children instead of yourself</span>
+                  </div>
+                  <button
+                    type="button"
+                    className={`switch${form.isParent ? ' on' : ''}`}
+                    aria-pressed={form.isParent}
+                    aria-label="Toggle parent account"
+                  />
+                </div>
+              </div>
+
+              {form.isParent && (
+                <div className="parent-children">
+                  <label>Children&apos;s names</label>
+                  <p className="muted" style={{ fontSize: '12px', marginBottom: '0.6rem' }}>
+                    Enter each child you want to register for lessons. A new box appears when you
+                    fill the previous one.
+                  </p>
+                  {form.childrenNames.map((name, index) => (
+                    <div className="field" key={`child-${index}`} style={{ marginBottom: '0.5rem' }}>
+                      <input
+                        value={name}
+                        placeholder={`Child ${index + 1} full name`}
+                        aria-label={`Child ${index + 1} full name`}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setForm((f) => {
+                            const next = [...f.childrenNames];
+                            next[index] = value;
+                            // Keep one empty box after the last filled name.
+                            const trimmed = next.map((n) => n.trim());
+                            const lastFilled = trimmed.reduce(
+                              (acc, n, i) => (n ? i : acc),
+                              -1,
+                            );
+                            const kept = next.slice(0, Math.max(lastFilled + 1, 0));
+                            if (!kept.length || kept[kept.length - 1].trim()) kept.push('');
+                            return { ...f, childrenNames: kept };
+                          });
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
           )}
 
           {isTeacher && (

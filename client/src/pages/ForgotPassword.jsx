@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { api } from '../api/client.js';
+import { formValues } from '../lib/form.js';
 
 function roleFromPath(pathname) {
   return pathname.startsWith('/teacher') ? 'teacher' : 'student';
@@ -13,7 +14,6 @@ export default function ForgotPassword() {
   const roleLabel = role === 'teacher' ? 'Teacher' : 'Student';
   const btnClass = role === 'teacher' ? 'btn btn-primary btn-block' : 'btn btn-green btn-block';
 
-  const [email, setEmail] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [busy, setBusy] = useState(false);
@@ -22,6 +22,7 @@ export default function ForgotPassword() {
     e.preventDefault();
     setError('');
     setSuccess('');
+    const { email } = formValues(e, ['email']);
     setBusy(true);
     try {
       const data = await api('/auth/forgot-password', {
@@ -48,14 +49,14 @@ export default function ForgotPassword() {
           </p>
         </div>
       ) : (
-        <form className="card" onSubmit={submit}>
+        <form className="card" onSubmit={submit} method="post">
           <div className="field">
-            <label>Email</label>
+            <label htmlFor="forgot-email">Email</label>
             <input
+              id="forgot-email"
+              name="email"
               type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              autoComplete="email"
+              autoComplete="username"
               required
             />
           </div>

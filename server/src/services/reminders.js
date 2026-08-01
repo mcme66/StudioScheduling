@@ -14,7 +14,7 @@ export async function runReminderSweep(now = new Date()) {
 
   const { rows } = await query(
     `SELECT b.id,
-            b.lesson_date,
+            b.lesson_date, b.child_name,
             s.start_time, s.duration_min, s.weekday,
             st.full_name AS student_name, st.email AS student_email, st.receive_emails,
             t.full_name  AS teacher_name
@@ -36,6 +36,7 @@ export async function runReminderSweep(now = new Date()) {
       teacher: { full_name: row.teacher_name },
       slot: { start_time: row.start_time, duration_min: row.duration_min, weekday: row.weekday },
       lessonDate: row.lesson_date instanceof Date ? row.lesson_date.toISOString().slice(0, 10) : row.lesson_date,
+      childName: row.child_name || null,
     });
     await query('UPDATE bookings SET reminder_sent_at = now() WHERE id = $1', [row.id]);
   }

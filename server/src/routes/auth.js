@@ -86,8 +86,11 @@ authRouter.post(
       }
 
       const result = await query(
-        `INSERT INTO teachers (email, password_hash, full_name, phone, bio, default_price_cents, default_duration_min)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `INSERT INTO teachers (
+           email, password_hash, full_name, phone, bio,
+           default_price_cents, default_duration_min, is_active
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, false)
          RETURNING *`,
         [
           data.email,

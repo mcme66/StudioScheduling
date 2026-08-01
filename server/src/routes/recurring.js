@@ -5,12 +5,16 @@ import { asyncHandler, HttpError } from '../middleware/error.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { sendRecurringApproved } from '../services/email.js';
 import { weekdayOf, isValidDateStr, todayISO } from '../utils/week.js';
+import { normalizeChildrenNames } from './students.js';
 
 export const recurringRouter = Router();
 
 const fmtTime = (t) => (typeof t === 'string' ? t.slice(0, 5) : t);
 
-const requestSchema = z.object({ slotId: z.number().int().positive() });
+const requestSchema = z.object({
+  slotId: z.number().int().positive(),
+  childName: z.string().max(120).optional().nullable(),
+});
 
 const skipSchema = z.object({
   date: z.string().refine(isValidDateStr, 'date must be YYYY-MM-DD.'),
@@ -29,7 +33,7 @@ recurringRouter.post(
     if (req.user.role !== 'student') {
       throw new HttpError(403, 'Only students can request a weekly spot.');
     }
-    const { slotId } = requestSchema.parse(req.body);
+    const { slotId, childName: requestedChildName } = requestSchema.parse(req.body);
 
     const { rows: slotRows } = await query(
       'SELECT id, active, one_off_date FROM slots WHERE id = $1',
@@ -43,6 +47,35 @@ recurringRouter.post(
         400,
         'Weekly time slots cannot be requested for this lesson slot because this is a temporary slot.',
       );
+    }
+
+    const { rows: studentRows } = await query(
+      'SELECT is_parent, children_names FROM students WHERE id = $1',
+      [req.user.id],
+    );
+    const student = studentRows[0];
+    if (!student) throw new HttpError(401, 'Account no longer exists.');
+
+    let childName = null;
+    if (student.is_parent) {
+      const children = normalizeChildrenNames(student.children_names);
+      if (!children.length) {
+        throw new HttpError(
+          400,
+          'Add at least one child on your profile before booking as a parent.',
+        );
+      }
+      const name = String(requestedChildName || '').trim();
+      if (!name) {
+        throw new HttpError(400, 'Select which child this lesson is for.');
+      }
+      const match = children.find((c) => c.toLowerCase() === name.toLowerCase());
+      if (!match) {
+        throw new HttpError(400, 'That child is not on your profile.');
+      }
+      childName = match;
+    } else if (requestedChildName) {
+      throw new HttpError(400, 'Only parent accounts can book for a child.');
     }
 
     const { rows: approvedRows } = await query(
@@ -65,12 +98,14 @@ recurringRouter.post(
     }
 
     const { rows } = await query(
-      `INSERT INTO recurring_assignments (slot_id, student_id, status)
-       VALUES ($1, $2, 'pending') RETURNING *`,
-      [slotId, req.user.id],
+      `INSERT INTO recurring_assignments (slot_id, student_id, status, child_name)
+       VALUES ($1, $2, 'pending', $3) RETURNING *`,
+      [slotId, req.user.id, childName],
     );
 
-    res.status(201).json({ request: { id: rows[0].id, slotId, status: 'pending' } });
+    res.status(201).json({
+      request: { id: rows[0].id, slotId, status: 'pending', childName },
+    });
   }),
 );
 
@@ -80,7 +115,7 @@ recurringRouter.get(
   requireRole('teacher'),
   asyncHandler(async (req, res) => {
     const { rows } = await query(
-      `SELECT ra.id, ra.requested_at, s.id AS slot_id, s.weekday, s.start_time, s.duration_min,
+      `SELECT ra.id, ra.requested_at, ra.child_name, s.id AS slot_id, s.weekday, s.start_time, s.duration_min,
               st.full_name AS student_name, st.email AS student_email, st.phone AS student_phone,
               (
                 SELECT b.lesson_date FROM bookings b
@@ -107,7 +142,12 @@ recurringRouter.get(
             ? r.first_lesson_date.toISOString().slice(0, 10)
             : String(r.first_lesson_date).slice(0, 10)
           : null,
-        student: { name: r.student_name, email: r.student_email, phone: r.student_phone },
+        student: {
+          name: r.student_name,
+          email: r.student_email,
+          phone: r.student_phone,
+          childName: r.child_name || null,
+        },
       })),
     });
   }),
@@ -163,6 +203,7 @@ recurringRouter.post(
       student: studentRows[0],
       teacher: teacherRows[0],
       slot: slotRows[0],
+      childName: result.child_name || null,
     });
 
     res.json({ ok: true });

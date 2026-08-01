@@ -5,6 +5,7 @@ import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
 import PaidToggle from '../components/PaidToggle.jsx';
 import Modal, { ModalOption } from '../components/Modal.jsx';
+import AddToCalendar from '../components/AddToCalendar.jsx';
 import { WEEKDAYS, fmtTimeRange, fmtDate, upcomingWeekdayDates } from '../lib/format.js';
 
 const UPCOMING_WEEKS = 6;
@@ -13,6 +14,7 @@ export default function MyLessons() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const [leaveTarget, setLeaveTarget] = useState(null);
+  const [calendarTarget, setCalendarTarget] = useState(null);
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['my-lessons'],
@@ -94,7 +96,12 @@ export default function MyLessons() {
                         <div className="d">Every {WEEKDAYS[r.weekday]}</div>
                         <div>{fmtTimeRange(r.startTime, r.durationMin)}</div>
                       </div>
-                      <div className="grow">{r.teacher.name}</div>
+                      <div className="grow">
+                        {r.teacher.name}
+                        {r.childName && (
+                          <div className="contact">For {r.childName}</div>
+                        )}
+                      </div>
                       <div className="row" style={{ gap: '0.4rem' }}>
                         <span className="pill pill-taken">Weekly</span>
                         <button
@@ -133,6 +140,22 @@ export default function MyLessons() {
                                 <button
                                   type="button"
                                   className="btn btn-ghost btn-sm"
+                                  onClick={() =>
+                                    setCalendarTarget({
+                                      teacherName: r.teacher.name,
+                                      childName: r.childName,
+                                      lessonDate: date,
+                                      startTime: r.startTime,
+                                      durationMin: r.durationMin,
+                                      subtitle: `${fmtDate(date, { weekday: 'short', month: 'short', day: 'numeric' })} · ${fmtTimeRange(r.startTime, r.durationMin)}`,
+                                    })
+                                  }
+                                >
+                                  Calendar
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-sm"
                                   onClick={() => skipWeek.mutate({ id: r.id, date })}
                                   disabled={skipWeek.isPending}
                                 >
@@ -165,7 +188,10 @@ export default function MyLessons() {
                   </div>
                   <div className="grow">
                     {fmtTimeRange(b.startTime, b.durationMin)}
-                    <div className="contact">{b.teacher.name}</div>
+                    <div className="contact">
+                      {b.teacher.name}
+                      {b.childName ? ` · For ${b.childName}` : ''}
+                    </div>
                   </div>
                   <div className="row" style={{ gap: '0.4rem' }}>
                     {b.trackPayments && (
@@ -175,6 +201,22 @@ export default function MyLessons() {
                         onChange={(paid) => paidMutation.mutate({ id: b.id, paid })}
                       />
                     )}
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() =>
+                        setCalendarTarget({
+                          teacherName: b.teacher.name,
+                          childName: b.childName,
+                          lessonDate: b.lessonDate,
+                          startTime: b.startTime,
+                          durationMin: b.durationMin,
+                          subtitle: `${fmtDate(b.lessonDate, { weekday: 'short', month: 'short', day: 'numeric' })} · ${fmtTimeRange(b.startTime, b.durationMin)}`,
+                        })
+                      }
+                    >
+                      Calendar
+                    </button>
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm"
@@ -200,7 +242,10 @@ export default function MyLessons() {
                   </div>
                   <div className="grow">
                     {fmtTimeRange(b.startTime, b.durationMin)}
-                    <div className="contact">{b.teacher.name}</div>
+                    <div className="contact">
+                      {b.teacher.name}
+                      {b.childName ? ` · For ${b.childName}` : ''}
+                    </div>
                   </div>
                   {b.trackPayments && (
                     <PaidToggle
@@ -242,6 +287,18 @@ export default function MyLessons() {
             onClick={() => setLeaveTarget(null)}
           />
         </Modal>
+      )}
+
+      {calendarTarget && (
+        <AddToCalendar
+          teacherName={calendarTarget.teacherName}
+          childName={calendarTarget.childName}
+          lessonDate={calendarTarget.lessonDate}
+          startTime={calendarTarget.startTime}
+          durationMin={calendarTarget.durationMin}
+          subtitle={calendarTarget.subtitle}
+          onClose={() => setCalendarTarget(null)}
+        />
       )}
     </div>
   );

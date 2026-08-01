@@ -3,8 +3,15 @@ import { z } from 'zod';
 import { query, withTransaction } from '../db.js';
 import { asyncHandler, HttpError } from '../middleware/error.js';
 import { requireAuth } from '../middleware/auth.js';
-import { weekdayOf, isValidDateStr, todayISO, isLessonPast } from '../utils/week.js';
+import {
+  weekdayOf,
+  isValidDateStr,
+  todayISO,
+  isLessonPast,
+  isDateInSeries,
+} from '../utils/week.js';
 import { sendBookingConfirmation } from '../services/email.js';
+import { normalizeChildrenNames } from './students.js';
 
 export const bookingsRouter = Router();
 
@@ -14,7 +21,42 @@ const fmtDate = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : d);
 const createSchema = z.object({
   slotId: z.number().int().positive(),
   lessonDate: z.string().refine(isValidDateStr, 'lessonDate must be YYYY-MM-DD.'),
+  childName: z.string().max(120).optional().nullable(),
 });
+
+/** Resolve which child name (if any) a parent account is booking for. */
+async function resolveChildName(client, studentId, requestedChildName) {
+  const { rows } = await client.query(
+    'SELECT is_parent, children_names FROM students WHERE id = $1',
+    [studentId],
+  );
+  const student = rows[0];
+  if (!student) throw new HttpError(401, 'Account no longer exists.');
+
+  if (!student.is_parent) {
+    if (requestedChildName) {
+      throw new HttpError(400, 'Only parent accounts can book for a child.');
+    }
+    return null;
+  }
+
+  const children = normalizeChildrenNames(student.children_names);
+  if (!children.length) {
+    throw new HttpError(
+      400,
+      'Add at least one child on your profile before booking as a parent.',
+    );
+  }
+  const name = String(requestedChildName || '').trim();
+  if (!name) {
+    throw new HttpError(400, 'Select which child this lesson is for.');
+  }
+  const match = children.find((c) => c.toLowerCase() === name.toLowerCase());
+  if (!match) {
+    throw new HttpError(400, 'That child is not on your profile.');
+  }
+  return match;
+}
 
 const paidSchema = z.object({
   paid: z.boolean(),
@@ -27,13 +69,15 @@ bookingsRouter.post(
     if (req.user.role !== 'student') {
       throw new HttpError(403, 'Only students can book lessons.');
     }
-    const { slotId, lessonDate } = createSchema.parse(req.body);
+    const { slotId, lessonDate, childName: requestedChildName } = createSchema.parse(req.body);
 
     if (lessonDate < todayISO()) {
       throw new HttpError(400, 'That date is in the past.');
     }
 
     const booking = await withTransaction(async (client) => {
+      const childName = await resolveChildName(client, req.user.id, requestedChildName);
+
       const { rows: slotRows } = await client.query(
         'SELECT * FROM slots WHERE id = $1 FOR UPDATE',
         [slotId],
@@ -51,6 +95,18 @@ bookingsRouter.post(
 
       // A one-off ("this week only") slot can only be booked on its date.
       if (slot.one_off_date && fmtDate(slot.one_off_date) !== lessonDate) {
+        throw new HttpError(404, 'That lesson time is not available.');
+      }
+
+      // Weekly series bounds.
+      if (
+        !slot.one_off_date &&
+        !isDateInSeries(
+          lessonDate,
+          slot.series_start_date ? fmtDate(slot.series_start_date) : null,
+          slot.series_end_date ? fmtDate(slot.series_end_date) : null,
+        )
+      ) {
         throw new HttpError(404, 'That lesson time is not available.');
       }
 
@@ -86,16 +142,16 @@ bookingsRouter.post(
       }
 
       const { rows } = await client.query(
-        `INSERT INTO bookings (slot_id, student_id, lesson_date)
-         VALUES ($1, $2, $3) RETURNING *`,
-        [slotId, req.user.id, lessonDate],
+        `INSERT INTO bookings (slot_id, student_id, lesson_date, child_name)
+         VALUES ($1, $2, $3, $4) RETURNING *`,
+        [slotId, req.user.id, lessonDate, childName],
       ).catch((err) => {
         if (err?.code === '23505') {
           throw new HttpError(409, 'That time was just booked. Please choose another.');
         }
         throw err;
       });
-      return { booking: rows[0], slot };
+      return { booking: rows[0], slot, childName };
     });
 
     // Send confirmation (best-effort) after the transaction commits.
@@ -108,6 +164,7 @@ bookingsRouter.post(
       teacher: teacherRows[0],
       slot: booking.slot,
       lessonDate,
+      childName: booking.childName,
     });
 
     res.status(201).json({
@@ -116,6 +173,7 @@ bookingsRouter.post(
         slotId,
         lessonDate,
         status: booking.booking.status,
+        childName: booking.childName,
       },
     });
   }),
@@ -129,7 +187,7 @@ bookingsRouter.get(
       throw new HttpError(403, 'Only students have personal bookings.');
     }
     const { rows: bookings } = await query(
-      `SELECT b.id, b.lesson_date, b.status, b.created_at, b.paid,
+      `SELECT b.id, b.lesson_date, b.status, b.created_at, b.paid, b.child_name,
               s.weekday, s.start_time, s.duration_min, s.price_cents,
               t.id AS teacher_id, t.full_name AS teacher_name, t.track_payments
          FROM bookings b
@@ -141,7 +199,7 @@ bookingsRouter.get(
     );
 
     const { rows: recurring } = await query(
-      `SELECT ra.id, ra.slot_id, s.weekday, s.start_time, s.duration_min, s.price_cents,
+      `SELECT ra.id, ra.slot_id, ra.child_name, s.weekday, s.start_time, s.duration_min, s.price_cents,
               t.id AS teacher_id, t.full_name AS teacher_name, t.track_payments
          FROM recurring_assignments ra
          JOIN slots s ON s.id = ra.slot_id
@@ -196,6 +254,7 @@ bookingsRouter.get(
       priceCents: b.price_cents,
       paid: b.paid === true,
       trackPayments: b.track_payments === true,
+      childName: b.child_name || null,
       teacher: { id: b.teacher_id, name: b.teacher_name },
       past: fmtDate(b.lesson_date) < today,
     }));
@@ -211,6 +270,7 @@ bookingsRouter.get(
         durationMin: r.duration_min,
         priceCents: r.price_cents,
         trackPayments: r.track_payments === true,
+        childName: r.child_name || null,
         teacher: { id: r.teacher_id, name: r.teacher_name },
         exceptions: exceptionsBySlot.get(r.slot_id) || [],
         payments: paymentsByRecurring.get(r.id) || [],

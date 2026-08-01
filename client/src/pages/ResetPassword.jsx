@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client.js';
+import PasswordField from '../components/PasswordField.jsx';
+import { formValues } from '../lib/form.js';
 
 function roleFromPath(pathname) {
   return pathname.startsWith('/teacher') ? 'teacher' : 'student';
@@ -16,8 +18,6 @@ export default function ResetPassword() {
   const btnClass = role === 'teacher' ? 'btn btn-primary btn-block' : 'btn btn-green btn-block';
   const token = searchParams.get('token') || '';
 
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -29,6 +29,7 @@ export default function ResetPassword() {
       setError('This reset link is invalid or has expired.');
       return;
     }
+    const { password, confirmPassword } = formValues(e, ['password', 'confirmPassword']);
     if (password !== confirmPassword) {
       setError('Passwords do not match.');
       return;
@@ -52,29 +53,21 @@ export default function ResetPassword() {
       <h1 className="page-title">{roleLabel} password reset</h1>
       <p className="page-sub">Choose a new password for your account.</p>
 
-      <form className="card" onSubmit={submit}>
-        <div className="field">
-          <label>New password</label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="new-password"
-            minLength={8}
-            required
-          />
-        </div>
-        <div className="field">
-          <label>Confirm password</label>
-          <input
-            type="password"
-            value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
-            autoComplete="new-password"
-            minLength={8}
-            required
-          />
-        </div>
+      <form className="card" onSubmit={submit} method="post">
+        <PasswordField
+          label="New password"
+          name="password"
+          autoComplete="new-password"
+          minLength={8}
+          required
+        />
+        <PasswordField
+          label="Confirm password"
+          name="confirmPassword"
+          autoComplete="new-password"
+          minLength={8}
+          required
+        />
         {error && <p className="error-text">{error}</p>}
         <button type="submit" className={btnClass} disabled={busy}>
           {busy ? 'Saving…' : 'Reset password'}

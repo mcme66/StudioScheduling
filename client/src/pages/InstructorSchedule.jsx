@@ -5,6 +5,8 @@ import { api } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useToast } from '../components/Toast.jsx';
 import ScheduleInfoPanel from '../components/ScheduleInfoPanel.jsx';
+import Modal, { ModalOption } from '../components/Modal.jsx';
+import AddToCalendar from '../components/AddToCalendar.jsx';
 import {
   WEEKDAYS,
   fmtTime,
@@ -35,6 +37,9 @@ export default function InstructorSchedule() {
   const [userPickedWeek, setUserPickedWeek] = useState(false);
   const [selected, setSelected] = useState(null); // slot object
   const [wantsRecurring, setWantsRecurring] = useState(false);
+  const [childPickerOpen, setChildPickerOpen] = useState(false);
+  const [selectedChild, setSelectedChild] = useState(null);
+  const [calendarTarget, setCalendarTarget] = useState(null);
   const confirmRef = useRef(null);
 
   const baseMonday = getMonday(todayISO());
@@ -47,6 +52,14 @@ export default function InstructorSchedule() {
       api(`/teachers/${teacherId}/schedule?week=${weekStart}&studio=${encodeURIComponent(slug)}`),
     refetchInterval: 15000,
   });
+
+  const profileQuery = useQuery({
+    queryKey: ['student-profile'],
+    queryFn: () => api('/students/me'),
+    enabled: user?.role === 'student',
+  });
+  const isParent = profileQuery.data?.student?.isParent === true;
+  const childrenNames = (profileQuery.data?.student?.childrenNames || []).filter(Boolean);
 
   // If the current week has no bookable slots left, jump ahead to the next week.
   useEffect(() => {
@@ -65,19 +78,36 @@ export default function InstructorSchedule() {
   }, [selected]);
 
   const bookMutation = useMutation({
-    mutationFn: async ({ slot, recurring }) => {
+    mutationFn: async ({ slot, recurring, childName }) => {
       await api('/bookings', {
         method: 'POST',
-        body: { slotId: slot.id, lessonDate: slot.lessonDate },
+        body: {
+          slotId: slot.id,
+          lessonDate: slot.lessonDate,
+          ...(childName ? { childName } : {}),
+        },
       });
       if (recurring) {
-        await api('/recurring', { method: 'POST', body: { slotId: slot.id } });
+        await api('/recurring', {
+          method: 'POST',
+          body: { slotId: slot.id, ...(childName ? { childName } : {}) },
+        });
       }
     },
-    onSuccess: (_d, { recurring }) => {
+    onSuccess: (_d, { slot, recurring, childName }) => {
       toast(recurring ? 'Booked! Weekly spot requested.' : 'Lesson booked!');
+      setCalendarTarget({
+        teacherName: data?.teacher?.fullName || 'your instructor',
+        childName: childName || null,
+        lessonDate: slot.lessonDate,
+        startTime: slot.startTime,
+        durationMin: slot.durationMin,
+        subtitle: `${fmtDate(slot.lessonDate, { weekday: 'short', month: 'short', day: 'numeric' })} · ${fmtTimeRange(slot.startTime, slot.durationMin)}`,
+      });
       setSelected(null);
       setWantsRecurring(false);
+      setSelectedChild(null);
+      setChildPickerOpen(false);
       queryClient.invalidateQueries({ queryKey });
     },
     onError: (err) => {
@@ -85,6 +115,34 @@ export default function InstructorSchedule() {
       queryClient.invalidateQueries({ queryKey });
     },
   });
+
+  const startBooking = () => {
+    if (!selected) return;
+    if (isParent) {
+      if (!childrenNames.length) {
+        toast('Add your children on your profile before booking.');
+        navigate('/profile');
+        return;
+      }
+      if (selectedChild) {
+        bookMutation.mutate({
+          slot: selected,
+          recurring: wantsRecurring,
+          childName: selectedChild,
+        });
+        return;
+      }
+      setChildPickerOpen(true);
+      return;
+    }
+    bookMutation.mutate({ slot: selected, recurring: wantsRecurring });
+  };
+
+  const confirmChildBooking = (childName) => {
+    setSelectedChild(childName);
+    setChildPickerOpen(false);
+    bookMutation.mutate({ slot: selected, recurring: wantsRecurring, childName });
+  };
 
   const grouped = useMemo(() => {
     const byDay = new Map();
@@ -106,6 +164,8 @@ export default function InstructorSchedule() {
     }
     setSelected(slot);
     setWantsRecurring(false);
+    setSelectedChild(null);
+    setChildPickerOpen(false);
   };
 
   const statusLabel = (slot, past) => {
@@ -267,6 +327,11 @@ export default function InstructorSchedule() {
             <strong>{WEEKDAYS[selected.weekday]}</strong>, {fmtDate(selected.lessonDate)} ·{' '}
             {fmtTimeRange(selected.startTime, selected.durationMin)}
           </p>
+          {isParent && selectedChild && (
+            <p className="muted" style={{ fontSize: '13px', marginBottom: '0.75rem' }}>
+              Registering: <strong>{selectedChild}</strong>
+            </p>
+          )}
 
           {selected.oneOff ? (
             <div className="recurring-locked" role="note">
@@ -297,7 +362,10 @@ export default function InstructorSchedule() {
             <button
               type="button"
               className="btn btn-ghost"
-              onClick={() => setSelected(null)}
+              onClick={() => {
+                setSelected(null);
+                setSelectedChild(null);
+              }}
               disabled={bookMutation.isPending}
             >
               Cancel
@@ -306,15 +374,55 @@ export default function InstructorSchedule() {
               type="button"
               className="btn btn-primary grow"
               style={{ flex: 1 }}
-              onClick={() => bookMutation.mutate({ slot: selected, recurring: wantsRecurring })}
+              onClick={startBooking}
               disabled={bookMutation.isPending}
             >
               {bookMutation.isPending
                 ? 'Booking…'
-                : `Book ${fmtTime(selected.startTime)}`}
+                : isParent && !selectedChild
+                  ? 'Choose child & book'
+                  : isParent && selectedChild
+                    ? `Book for ${selectedChild}`
+                    : `Book ${fmtTime(selected.startTime)}`}
             </button>
           </div>
         </div>
+      )}
+
+      {childPickerOpen && (
+        <Modal
+          title="Who is this lesson for?"
+          subtitle="Select the child you want to register for this lesson."
+          onClose={() => !bookMutation.isPending && setChildPickerOpen(false)}
+        >
+          {childrenNames.map((name) => (
+            <ModalOption
+              key={name}
+              label={name}
+              description="Register this child for the lesson"
+              disabled={bookMutation.isPending}
+              onClick={() => confirmChildBooking(name)}
+            />
+          ))}
+          <ModalOption
+            label="Cancel"
+            description="Go back without booking"
+            disabled={bookMutation.isPending}
+            onClick={() => setChildPickerOpen(false)}
+          />
+        </Modal>
+      )}
+
+      {calendarTarget && (
+        <AddToCalendar
+          teacherName={calendarTarget.teacherName}
+          childName={calendarTarget.childName}
+          lessonDate={calendarTarget.lessonDate}
+          startTime={calendarTarget.startTime}
+          durationMin={calendarTarget.durationMin}
+          subtitle={calendarTarget.subtitle}
+          onClose={() => setCalendarTarget(null)}
+        />
       )}
         </div>
 

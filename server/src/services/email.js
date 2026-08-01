@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import { env, isEmailConfigured } from '../env.js';
+import { buildIcs, buildLessonEvent, googleCalendarUrl } from '../utils/calendar.js';
 
 let transporter = null;
 
@@ -34,21 +35,46 @@ function emailFooterHtml() {
  * Send an email. When SMTP is not configured, the message is logged to the
  * console instead so local/dev environments work without a mail server.
  */
-export async function sendEmail({ to, subject, text, html }) {
+export async function sendEmail({ to, subject, text, html, attachments }) {
   if (!transporter) {
     console.log('\n--- EMAIL (SMTP not configured, logging only) ---');
     console.log(`To:      ${to}`);
     console.log(`Subject: ${subject}`);
     console.log(text || html);
+    if (attachments?.length) {
+      console.log(`Attachments: ${attachments.map((a) => a.filename).join(', ')}`);
+    }
     console.log('--- END EMAIL ---\n');
     return;
   }
   try {
-    await transporter.sendMail({ from: env.smtp.from, to, subject, text, html });
+    await transporter.sendMail({
+      from: env.smtp.from,
+      to,
+      subject,
+      text,
+      html,
+      attachments,
+    });
   } catch (err) {
     // Never let an email failure break a booking flow.
     console.error('Failed to send email:', err.message);
   }
+}
+
+function lessonCalendarPayload({ teacher, slot, lessonDate, childName }) {
+  const manageUrl = `${env.clientUrl}/my-lessons`;
+  const event = buildLessonEvent({
+    teacherName: teacher.full_name,
+    childName,
+    lessonDate,
+    startTime: slot.start_time,
+    durationMin: slot.duration_min,
+    manageUrl,
+  });
+  const googleUrl = googleCalendarUrl(event);
+  const ics = buildIcs(event);
+  return { manageUrl, googleUrl, ics, event };
 }
 
 function formatTime(timeStr) {
@@ -58,40 +84,65 @@ function formatTime(timeStr) {
   return m === 0 ? `${h12} ${ampm}` : `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
 }
 
-export async function sendBookingConfirmation({ student, teacher, slot, lessonDate }) {
+export async function sendBookingConfirmation({ student, teacher, slot, lessonDate, childName }) {
   if (!studentWantsEmail(student)) return;
 
+  const forLine = childName ? ` for ${childName}` : '';
+  const { manageUrl, googleUrl, ics } = lessonCalendarPayload({
+    teacher,
+    slot,
+    lessonDate,
+    childName,
+  });
   const subject = `Lesson confirmed: ${lessonDate} at ${formatTime(slot.start_time)}`;
   const body = [
     `Hi ${student.full_name},`,
     '',
-    `Your lesson with ${teacher.full_name} is confirmed.`,
+    `Your lesson${forLine} with ${teacher.full_name} is confirmed.`,
     `Date: ${lessonDate}`,
     `Time: ${formatTime(slot.start_time)} (${slot.duration_min} min)`,
     '',
-    `Manage your lessons: ${env.clientUrl}/my-lessons`,
+    `Add to Google Calendar: ${googleUrl}`,
+    '(A calendar invite file is also attached for Apple Calendar, Outlook, and others.)',
+    '',
+    `Manage your lessons: ${manageUrl}`,
   ].join('\n');
   const text = body + emailFooterText();
   const html = [
     `<p>Hi ${student.full_name},</p>`,
-    `<p>Your lesson with ${teacher.full_name} is confirmed.</p>`,
+    `<p>Your lesson${forLine} with ${teacher.full_name} is confirmed.</p>`,
     `<p><strong>Date:</strong> ${lessonDate}<br>`,
     `<strong>Time:</strong> ${formatTime(slot.start_time)} (${slot.duration_min} min)</p>`,
-    `<p><a href="${env.clientUrl}/my-lessons">Manage your lessons</a></p>`,
+    `<p><a href="${googleUrl}">Add to Google Calendar</a><br>`,
+    `<span style="font-size:13px;color:#666;">A .ics attachment is included for Apple Calendar, Outlook, and others.</span></p>`,
+    `<p><a href="${manageUrl}">Manage your lessons</a></p>`,
     emailFooterHtml(),
   ].join('');
-  await sendEmail({ to: student.email, subject, text, html });
+  await sendEmail({
+    to: student.email,
+    subject,
+    text,
+    html,
+    attachments: [
+      {
+        filename: `lesson-${lessonDate}.ics`,
+        content: ics,
+        contentType: 'text/calendar; charset=utf-8',
+      },
+    ],
+  });
 }
 
-export async function sendRecurringApproved({ student, teacher, slot }) {
+export async function sendRecurringApproved({ student, teacher, slot, childName }) {
   if (!studentWantsEmail(student)) return;
 
   const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const forLine = childName ? ` for ${childName}` : '';
   const subject = 'Your weekly lesson spot is confirmed';
   const body = [
     `Hi ${student.full_name},`,
     '',
-    `${teacher.full_name} approved your weekly spot:`,
+    `${teacher.full_name} approved your weekly spot${forLine}:`,
     `Every ${weekdays[slot.weekday]} at ${formatTime(slot.start_time)} (${slot.duration_min} min).`,
     '',
     `This time is now yours each week. View it any time: ${env.clientUrl}/my-lessons`,
@@ -99,7 +150,7 @@ export async function sendRecurringApproved({ student, teacher, slot }) {
   const text = body + emailFooterText();
   const html = [
     `<p>Hi ${student.full_name},</p>`,
-    `<p>${teacher.full_name} approved your weekly spot:</p>`,
+    `<p>${teacher.full_name} approved your weekly spot${forLine}:</p>`,
     `<p>Every ${weekdays[slot.weekday]} at ${formatTime(slot.start_time)} (${slot.duration_min} min).</p>`,
     `<p>This time is now yours each week. <a href="${env.clientUrl}/my-lessons">View your lessons</a></p>`,
     emailFooterHtml(),
@@ -107,29 +158,53 @@ export async function sendRecurringApproved({ student, teacher, slot }) {
   await sendEmail({ to: student.email, subject, text, html });
 }
 
-export async function sendReminder({ student, teacher, slot, lessonDate }) {
+export async function sendReminder({ student, teacher, slot, lessonDate, childName }) {
   if (!studentWantsEmail(student)) return;
 
+  const forLine = childName ? ` for ${childName}` : '';
+  const { manageUrl, googleUrl, ics } = lessonCalendarPayload({
+    teacher,
+    slot,
+    lessonDate,
+    childName,
+  });
   const subject = `Reminder: lesson on ${lessonDate} at ${formatTime(slot.start_time)}`;
   const body = [
     `Hi ${student.full_name},`,
     '',
-    `This is a reminder of your upcoming lesson with ${teacher.full_name}.`,
+    `This is a reminder of your upcoming lesson${forLine} with ${teacher.full_name}.`,
     `Date: ${lessonDate}`,
     `Time: ${formatTime(slot.start_time)} (${slot.duration_min} min)`,
     '',
-    `Need to cancel? ${env.clientUrl}/my-lessons`,
+    `Add to Google Calendar: ${googleUrl}`,
+    '(A calendar invite file is also attached for Apple Calendar, Outlook, and others.)',
+    '',
+    `Need to cancel? ${manageUrl}`,
   ].join('\n');
   const text = body + emailFooterText();
   const html = [
     `<p>Hi ${student.full_name},</p>`,
-    `<p>This is a reminder of your upcoming lesson with ${teacher.full_name}.</p>`,
+    `<p>This is a reminder of your upcoming lesson${forLine} with ${teacher.full_name}.</p>`,
     `<p><strong>Date:</strong> ${lessonDate}<br>`,
     `<strong>Time:</strong> ${formatTime(slot.start_time)} (${slot.duration_min} min)</p>`,
-    `<p><a href="${env.clientUrl}/my-lessons">Manage your lessons</a></p>`,
+    `<p><a href="${googleUrl}">Add to Google Calendar</a><br>`,
+    `<span style="font-size:13px;color:#666;">A .ics attachment is included for Apple Calendar, Outlook, and others.</span></p>`,
+    `<p><a href="${manageUrl}">Manage your lessons</a></p>`,
     emailFooterHtml(),
   ].join('');
-  await sendEmail({ to: student.email, subject, text, html });
+  await sendEmail({
+    to: student.email,
+    subject,
+    text,
+    html,
+    attachments: [
+      {
+        filename: `lesson-${lessonDate}.ics`,
+        content: ics,
+        contentType: 'text/calendar; charset=utf-8',
+      },
+    ],
+  });
 }
 
 export async function sendPasswordReset({ email, fullName, role, token }) {

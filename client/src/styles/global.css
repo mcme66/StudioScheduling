@@ -369,6 +369,18 @@ a:hover {
   color: #a05a00;
 }
 
+/* Parent profile children list */
+.parent-children {
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
+}
+.parent-children > label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
 /* Modal */
 .modal-backdrop {
   position: fixed;

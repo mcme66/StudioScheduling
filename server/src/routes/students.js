@@ -10,7 +10,25 @@ const profileSchema = z.object({
   fullName: z.string().min(1).max(120).optional(),
   phone: z.string().max(40).optional().or(z.literal('')),
   receiveEmails: z.boolean().optional(),
+  isParent: z.boolean().optional(),
+  childrenNames: z.array(z.string().max(120)).max(20).optional(),
 });
+
+/** Trim, drop blanks, de-dupe (case-insensitive) while preserving first spelling. */
+export function normalizeChildrenNames(names) {
+  if (!Array.isArray(names)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of names) {
+    const name = String(raw ?? '').trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(name);
+  }
+  return out;
+}
 
 function mapStudent(row) {
   return {
@@ -19,6 +37,8 @@ function mapStudent(row) {
     fullName: row.full_name,
     phone: row.phone || null,
     receiveEmails: row.receive_emails !== false,
+    isParent: row.is_parent === true,
+    childrenNames: Array.isArray(row.children_names) ? row.children_names : [],
   };
 }
 
@@ -51,6 +71,19 @@ studentsRouter.patch(
     if (data.receiveEmails !== undefined) {
       fields.push(`receive_emails = $${idx++}`);
       values.push(data.receiveEmails);
+    }
+    if (data.isParent !== undefined) {
+      fields.push(`is_parent = $${idx++}`);
+      values.push(data.isParent);
+      // Turning parent mode off clears the children list.
+      if (!data.isParent && data.childrenNames === undefined) {
+        fields.push(`children_names = $${idx++}`);
+        values.push([]);
+      }
+    }
+    if (data.childrenNames !== undefined) {
+      fields.push(`children_names = $${idx++}`);
+      values.push(normalizeChildrenNames(data.childrenNames));
     }
     if (!fields.length) throw new HttpError(400, 'Nothing to update.');
     values.push(req.user.id);
