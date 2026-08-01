@@ -6,6 +6,7 @@ import { requireAuth, requireRole } from '../middleware/auth.js';
 import { sendRecurringApproved } from '../services/email.js';
 import { weekdayOf, isValidDateStr, todayISO } from '../utils/week.js';
 import { normalizeChildrenNames } from './students.js';
+import { resolveBookerStudentId } from '../utils/booker.js';
 
 export const recurringRouter = Router();
 
@@ -25,22 +26,23 @@ const paidSchema = z.object({
   paid: z.boolean(),
 });
 
-// Student requests a weekly spot.
+// Student (or teacher-as-student) requests a weekly spot.
 recurringRouter.post(
   '/',
   requireAuth,
   asyncHandler(async (req, res) => {
-    if (req.user.role !== 'student') {
-      throw new HttpError(403, 'Only students can request a weekly spot.');
-    }
+    const bookerStudentId = await resolveBookerStudentId(req.user);
     const { slotId, childName: requestedChildName } = requestSchema.parse(req.body);
 
     const { rows: slotRows } = await query(
-      'SELECT id, active, one_off_date FROM slots WHERE id = $1',
+      'SELECT id, active, one_off_date, teacher_id FROM slots WHERE id = $1',
       [slotId],
     );
     if (!slotRows[0] || !slotRows[0].active) {
       throw new HttpError(404, 'That lesson time is not available.');
+    }
+    if (req.user.role === 'teacher' && slotRows[0].teacher_id === req.user.id) {
+      throw new HttpError(400, 'You cannot request a weekly spot on your own schedule.');
     }
     if (slotRows[0].one_off_date) {
       throw new HttpError(
@@ -51,7 +53,7 @@ recurringRouter.post(
 
     const { rows: studentRows } = await query(
       'SELECT is_parent, children_names FROM students WHERE id = $1',
-      [req.user.id],
+      [bookerStudentId],
     );
     const student = studentRows[0];
     if (!student) throw new HttpError(401, 'Account no longer exists.');
@@ -91,7 +93,7 @@ recurringRouter.post(
       [slotId],
     );
     if (pendingRows[0]) {
-      if (pendingRows[0].student_id === req.user.id) {
+      if (pendingRows[0].student_id === bookerStudentId) {
         throw new HttpError(409, 'You already have a pending request for this time.');
       }
       throw new HttpError(409, 'This time already has a pending weekly spot request.');
@@ -100,7 +102,7 @@ recurringRouter.post(
     const { rows } = await query(
       `INSERT INTO recurring_assignments (slot_id, student_id, status, child_name)
        VALUES ($1, $2, 'pending', $3) RETURNING *`,
-      [slotId, req.user.id, childName],
+      [slotId, bookerStudentId, childName],
     );
 
     res.status(201).json({
@@ -258,8 +260,9 @@ recurringRouter.patch(
       throw new HttpError(403, 'This instructor does not track payments.');
     }
 
+    const bookerStudentId = await resolveBookerStudentId(req.user).catch(() => null);
     const isTeacher = req.user.role === 'teacher' && ra.teacher_id === req.user.id;
-    const isStudent = req.user.role === 'student' && ra.student_id === req.user.id;
+    const isStudent = bookerStudentId != null && ra.student_id === bookerStudentId;
     if (!isTeacher && !isStudent) {
       throw new HttpError(403, 'You cannot update payment for this weekly spot.');
     }
@@ -308,8 +311,9 @@ recurringRouter.post(
     const ra = rows[0];
     if (!ra) throw new HttpError(404, 'Weekly spot not found.');
 
+    const bookerStudentId = await resolveBookerStudentId(req.user).catch(() => null);
     const isTeacher = req.user.role === 'teacher' && ra.teacher_id === req.user.id;
-    const isStudent = req.user.role === 'student' && ra.student_id === req.user.id;
+    const isStudent = bookerStudentId != null && ra.student_id === bookerStudentId;
     if (!isTeacher && !isStudent) {
       throw new HttpError(403, 'You cannot change this weekly spot.');
     }
@@ -348,8 +352,9 @@ recurringRouter.delete(
     const ra = rows[0];
     if (!ra) throw new HttpError(404, 'Weekly spot not found.');
 
+    const bookerStudentId = await resolveBookerStudentId(req.user).catch(() => null);
     const isTeacher = req.user.role === 'teacher' && ra.teacher_id === req.user.id;
-    const isStudent = req.user.role === 'student' && ra.student_id === req.user.id;
+    const isStudent = bookerStudentId != null && ra.student_id === bookerStudentId;
     if (!isTeacher && !isStudent) {
       throw new HttpError(403, 'You cannot remove this weekly spot.');
     }

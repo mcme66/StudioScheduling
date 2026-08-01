@@ -1,93 +1,121 @@
 # Lesson Scheduling
 
-A self-hosted lesson booking app built on the PERN stack (PostgreSQL, Express, React, Node). Anyone can browse studios and instructor schedules; students sign up to book lessons (including optional recurring weekly spots). Instructors sign up to manage their availability, bookings, and weekly-spot requests. Everything runs on your own server via Docker Compose.
+A self-hosted lesson booking app on the PERN stack (PostgreSQL, Express, React, Node). Anyone can browse studios and instructor schedules. Students book one-off lessons or request weekly spots; teachers manage availability, bookings, and requests. Deploy with Docker Compose, or run locally with Node + PostgreSQL.
 
 ## Features
 
-- **Studios** — the public homepage lists studios; each studio has its own instructors.
-- Separate **teacher** and **student** login and registration flows.
-- Email/password accounts with self-registration for both roles.
-- Students browse a studio's instructors, view open times, and book a slot for a specific week (up to 2 weeks ahead).
-- Recurring "weekly spot" requests that instructors approve or decline.
-- Students can cancel their own bookings and view upcoming lessons + history.
-- Booking confirmation and approval emails, plus automatic reminder emails before each lesson.
-- Per-instructor share panel with a QR code and a copyable announcement of open times.
+- **Studios** — public homepage lists studios; each studio shows its instructors.
+- Separate **teacher** and **student** accounts (login / register / forgot password).
+- Students book a slot for a specific week (up to 2 weeks ahead), cancel their own lessons, and manage upcoming + past bookings.
+- **Weekly spots** — students request a recurring time; teachers approve or decline.
+- **Parent accounts** — a student can mark themselves as a parent, list children, and book under a child’s name (contact stays on the parent account).
+- **Teachers as students** — teachers can enable “Student as well?” on their profile to book on *other* instructors’ schedules (not their own).
+- **Slot series** — teachers create one-time slots or weekly series (count, until a date, or forever), and can end a series from a given week forward.
+- **Payments** — optional per-teacher payment tracking on bookings.
+- **Inactive listing** — new teachers start inactive; the Active toggle controls whether they appear on the studio page.
+- **Calendar** — add lessons to Google Calendar / download `.ics` from My Lessons and confirmation emails.
+- Confirmation, approval, and reminder emails (or console-logged when SMTP is unset).
+- Per-instructor share panel with QR code and copyable open-times announcement.
 
 ## Tech stack
 
-- **Backend** (`/server`): Node 20, Express, `pg`, `bcryptjs`, `jsonwebtoken` (httpOnly cookie sessions), `zod` validation, `nodemailer`, `node-cron`, `node-pg-migrate`.
-- **Frontend** (`/client`): React 18 + Vite, React Router, TanStack Query.
-- **Database**: PostgreSQL 16.
-- **Deploy**: Docker Compose (`db`, `api`, `web`).
+- **Backend** (`server/`): Node 20, Express, `pg`, `bcryptjs`, JWT httpOnly cookies, `zod`, `nodemailer`, `node-cron`, `node-pg-migrate`
+- **Frontend** (`client/`): React 18 + Vite, React Router, TanStack Query
+- **Database**: PostgreSQL 16
+- **Deploy**: Docker Compose (`db`, `api`, `web`)
 
 ## Project structure
 
 ```
-server/        Express API + DB migrations + email/reminder services
-client/        React (Vite) single-page app, served by nginx in production
+server/              Express API, migrations, email/reminders, seed script
+client/              React (Vite) SPA (nginx in production)
 docker-compose.yml
-.env.example   Copy to .env and fill in
+.env.example         Root env for Docker — copy to .env
+server/.env.example  Local API env — copy to server/.env
 ```
 
-## App routes (frontend)
+## App routes
 
 | Path | Access | Purpose |
 |------|--------|---------|
 | `/` | Public | Browse studios |
 | `/studios/:slug` | Public | Instructors at a studio |
 | `/studios/:slug/book/:teacherId` | Public to view; login to book | Instructor schedule |
-| `/student/login`, `/student/register` | Public | Student account |
-| `/teacher/login`, `/teacher/register` | Public | Teacher account |
-| `/my-lessons` | Student | Upcoming and past bookings |
-| `/teacher` | Teacher | Dashboard, slots, bookings |
+| `/student/login`, `/student/register` | Public | Student auth |
+| `/teacher/login`, `/teacher/register` | Public | Teacher auth |
+| `/my-lessons` | Student (or teacher with “Student as well?”) | Bookings & weekly spots |
+| `/teacher` | Teacher | Dashboard: slots, bookings, weekly requests |
+| `/profile` | Signed-in user | Profile, parent toggle, teacher settings |
 
 ## Quick start (Docker Compose)
 
-Requires Docker and Docker Compose on the server.
+Requires Docker and Docker Compose.
 
 ```bash
 git clone <your-repo-url>
-cd "Lesson Scheduling"
+cd StudioScheduling
 cp .env.example .env
-# Edit .env: set strong POSTGRES_PASSWORD, a long JWT_SECRET, your CLIENT_URL, and SMTP (optional).
-nano .env
-
+# Set strong POSTGRES_PASSWORD, JWT_SECRET, CLIENT_URL, and optional SMTP_*
 docker compose up -d --build
 ```
 
-The site is served by the `web` container on `WEB_PORT` (default `8080`): open `http://YOUR_SERVER_IP:8080`.
-
-On startup the `api` container runs database migrations automatically. Check health:
+Open `http://YOUR_SERVER_IP:8080` (or whatever you set for `WEB_PORT`). Migrations run on API startup.
 
 ```bash
-curl http://localhost:8080/api/health     # {"ok":true,"db":"up"}
+curl http://localhost:8080/api/health   # {"ok":true,"db":"up"}
+docker compose exec api npm run seed    # optional demo data
 ```
 
-### Seed demo data (optional)
+## Demo accounts (after seed)
 
-```bash
-docker compose exec api npm run seed
-```
+All demo passwords are **`password123`**. Re-running `npm run seed` is safe (upserts).
 
-Demo logins after seeding:
-- **Studio:** Island Style Dance Studio
-- **Teacher:** `allen@example.com` / `password123`
-- **Student:** `student@example.com` / `password123`
+### Studios
+
+| Studio | URL path |
+|--------|----------|
+| Island Style Dance Studio | `/studios/island-style-dance-studio` |
+| Rhythm Room | `/studios/rhythm-room` |
+
+### Teachers
+
+| Email | Name | Studio | Notes |
+|-------|------|--------|--------|
+| `allen@example.com` | Allen | Island Style | Payment tracking on; forever weekly slots, a 6-week Wed 6pm series, and a one-time Thu slot |
+| `maria@example.com` | Maria Chen | Rhythm Room | Ballet/contemporary; no payment tracking |
+| `hidden@example.com` | Hidden Instructor | Island Style | **Inactive** — not listed on the studio page (tests the Active toggle) |
+
+### Students
+
+| Email | Name | Notes |
+|-------|------|--------|
+| `student@example.com` | Jane Student | Approved weekly Fri 3pm with Allen; also booked on the one-time Thu slot |
+| `parent@example.com` | Sam Metler | Parent account — children **Alina** and **Ian**; sample child bookings on Allen’s schedule |
+| `alex@example.com` | Alex Rivera | Pending weekly request Wed 4pm + a one-off on that slot (good for the teacher dashboard) |
+
+### What else the seed loads
+
+- Forever weekly template slots for Allen (Mon–Fri afternoon times) and Maria
+- A finite **6-week Wednesday 6pm** series for Allen
+- A **one-time Thursday** afternoon slot for Allen
+- Parent child bookings, an approved weekly holder, and a pending weekly request so dashboards aren’t empty
 
 ## Environment variables
 
-See [`.env.example`](.env.example) for the full list. Key ones:
+See [`.env.example`](.env.example) (Docker) and [`server/.env.example`](server/.env.example) (local). Important ones:
 
-- `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` and the matching `DATABASE_URL`.
-- `JWT_SECRET` — long random string. Generate: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`.
-- `COOKIE_SECURE=true` once you serve over HTTPS.
-- `CLIENT_URL` — public URL of the site (used in emails / CORS).
-- `WEB_PORT` — host port for the web container.
-- `SMTP_*` — outgoing mail. If unset, emails are printed to the API logs (`docker compose logs api`) instead of being sent.
+| Variable | Purpose |
+|----------|---------|
+| `POSTGRES_*` / `DATABASE_URL` | Database connection |
+| `JWT_SECRET` | Long random secret — e.g. `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"` |
+| `COOKIE_SECURE` | Set `true` when serving over HTTPS |
+| `CLIENT_URL` | Public site URL (emails / CORS) |
+| `WEB_PORT` | Host port for the web container (default `8080`) |
+| `SMTP_*` | Outgoing mail; if unset, emails print to the API logs |
 
-## Putting it behind a domain + HTTPS
+## HTTPS / domain
 
-The `web` container speaks plain HTTP on `WEB_PORT`. For a public domain with TLS, run a reverse proxy in front of it. Example with Caddy (automatic HTTPS):
+The `web` container serves plain HTTP. Put a reverse proxy in front for TLS. Example with Caddy:
 
 ```
 lessons.example.com {
@@ -95,104 +123,99 @@ lessons.example.com {
 }
 ```
 
-Then set `CLIENT_URL=https://lessons.example.com` and `COOKIE_SECURE=true` in `.env` and `docker compose up -d`. (nginx + certbot works equally well if you prefer.)
+Then set `CLIENT_URL=https://lessons.example.com` and `COOKIE_SECURE=true`, and recreate: `docker compose up -d`.
 
-## Run locally without Docker (Windows / macOS / Linux)
+## Run locally without Docker
 
-For quick local testing you can run the API and frontend directly with Node, using a locally-installed PostgreSQL. Convenience scripts live in the root [`package.json`](package.json) and work in PowerShell, Command Prompt, or a Unix shell.
+### 1. Prerequisites
 
-### 1. Install prerequisites
-
-- **Node.js 20+** (you have it if `node --version` works).
-- **PostgreSQL** running locally. On Windows, the easiest is the [EDB installer](https://www.postgresql.org/download/windows/); during setup note the password you give the `postgres` user. Make sure the PostgreSQL service is running afterward (check "Services" in Windows).
+- **Node.js 20+**
+- **PostgreSQL** running locally ([Windows installer](https://www.postgresql.org/download/windows/) works well)
 
 ### 2. Create the database
-
-Create an empty database named `lessons` (the tables are created automatically by the migration step). Using the bundled `psql` shell:
 
 ```bash
 psql -U postgres -c "CREATE DATABASE lessons;"
 ```
 
-(Or use pgAdmin: right-click Databases -> Create -> Database -> name it `lessons`.)
+(Or create a database named `lessons` in pgAdmin.)
 
-### 3. Configure the API environment
-
-Copy the local example env file and edit the connection string to match your PostgreSQL user/password:
+### 3. Configure the API
 
 ```bash
-copy server\.env.example server\.env      # PowerShell / cmd
-# (on macOS/Linux: cp server/.env.example server/.env)
+# Windows
+copy server\.env.example server\.env
+
+# macOS / Linux
+cp server/.env.example server/.env
 ```
 
-Open [`server/.env`](server/.env.example) and set `DATABASE_URL`, e.g. if your `postgres` password is `secret`:
+Set `DATABASE_URL` in `server/.env`, for example:
 
 ```
 DATABASE_URL=postgres://postgres:secret@localhost:5432/lessons
 ```
 
-This file is git-ignored and is separate from the root `.env` (which is only for Docker).
+This file is git-ignored and separate from the root `.env` used by Docker.
 
-### 4. Install dependencies, migrate, and seed
+### 4. Install, migrate, seed
 
-Run these from the project root:
+From the project root:
 
 ```bash
-npm install        # installs the root tooling (concurrently)
-npm run setup      # installs server + client dependencies
-npm run migrate    # creates all tables in the lessons database
-npm run seed       # optional: demo studio, teacher, student, and slots
+npm install
+npm run setup
+npm run migrate
+npm run seed      # optional — see Demo accounts above
 ```
 
-Demo logins after seeding:
-- **Studio:** Island Style Dance Studio (`/studios/island-style-dance-studio`)
-- **Teacher:** `allen@example.com` / `password123`
-- **Student:** `student@example.com` / `password123`
-
-### 5. Start the app
+### 5. Start
 
 ```bash
 npm run dev
 ```
 
-This launches both servers together:
-- **API** on http://localhost:4000
-- **Web app** on **http://localhost:5173** <- open this in your browser
+- **Web:** http://localhost:5173
+- **API:** http://localhost:4000
 
-The Vite dev server proxies `/api` to the API, so logins/cookies work on a single origin. Press `Ctrl+C` once to stop both.
+Vite proxies `/api` to the API so auth cookies work on one origin. `Ctrl+C` stops both.
 
-### Available root scripts
+### Root scripts
 
-- `npm run dev` - run API + frontend together (Vite at :5173, API at :4000).
-- `npm run dev:server` / `npm run dev:client` - run just one side.
-- `npm run setup` - install dependencies for both `server` and `client`.
-- `npm run migrate` - apply database migrations.
-- `npm run seed` - insert demo data (studio, teacher, student, slots).
-- `npm run build` - production build of the frontend.
+| Script | What it does |
+|--------|----------------|
+| `npm run dev` | API + frontend together |
+| `npm run dev:server` / `dev:client` | One side only |
+| `npm run setup` | Install `server` + `client` deps |
+| `npm run migrate` | Apply DB migrations |
+| `npm run seed` | Upsert demo studios, users, slots, bookings |
+| `npm run reset` | Drop/recreate schema tables via migrate reset + up *(local)* |
+| `npm run build` | Production frontend build |
 
 ### Troubleshooting
 
-- **`The $DATABASE_URL environment variable is not set` / connection errors** - check `server/.env` exists and `DATABASE_URL` is correct, and that the PostgreSQL service is running.
-- **`database "lessons" does not exist`** - run step 2 to create it.
-- **Port 5432 already in use / blocked** - another PostgreSQL (or a reserved Windows port range) is using it. Point `DATABASE_URL` at the correct port or free it up.
-- **Emails** - with `SMTP_*` left blank, confirmation/reminder emails are printed to the API console instead of being sent.
+- **`DATABASE_URL` / connection errors** — confirm `server/.env` exists, the URL is right, and PostgreSQL is running.
+- **`database "lessons" does not exist`** — create it (step 2).
+- **Port 5432 busy** — point `DATABASE_URL` at the correct port or stop the other Postgres instance.
+- **Emails** — with SMTP blank, messages appear in the API console (`docker compose logs api` or the `dev:server` terminal).
 
-## Database schema
+## Database overview
 
-- `studios` — dance studios / locations (`name`, `slug`, `description`).
-- `teacher_studios` — links each teacher to one studio at a time.
-- `teachers` / `students` — accounts (email + bcrypt hash + profile).
-- `slots` — a teacher's weekly availability template (weekday, start time, duration, price).
-- `recurring_assignments` — weekly-spot requests/holders (`pending` / `approved` / `declined`).
-- `bookings` — one-off lessons for a specific date (`booked` / `cancelled`), with `reminder_sent_at`.
+- `studios` — locations (`name`, `slug`, `description`)
+- `teacher_studios` — teacher ↔ studio (one studio at a time in the UI)
+- `teachers` / `students` — accounts; teachers may set `can_book_as_student` and link to a student row by email for booking FKs
+- `students.is_parent` / `children_names` — parent booking
+- `slots` — availability (weekday/time, optional one-off date, series start/end)
+- `recurring_assignments` — weekly-spot requests (`pending` / `approved` / `declined` / …)
+- `bookings` — dated lessons (`booked` / `cancelled`), optional `child_name`, reminders
 
-A slot is "taken" for a given week if it has an approved recurring assignment or a `booked` booking whose date falls in that week. Unique constraints prevent double-booking and more than one approved weekly student per slot.
+A slot is taken for a week if it has an approved weekly holder (unless that week is skipped) or a booked lesson on that date. Overlap rules for weekly series are enforced in the API.
 
-## Common operations
+## Common Docker ops
 
 ```bash
-docker compose logs -f api          # tail API logs (and console emails)
-docker compose exec db psql -U lessons -d lessons   # open a SQL shell
-docker compose down                 # stop (keeps the pgdata volume)
-docker compose down -v              # stop and delete the database volume
+docker compose logs -f api
+docker compose exec db psql -U lessons -d lessons
+docker compose down          # keep database volume
+docker compose down -v       # wipe database volume
 ```

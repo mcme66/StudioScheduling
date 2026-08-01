@@ -12,6 +12,7 @@ import {
 } from '../utils/week.js';
 import { getTeacherStudios, teacherListedAtStudio } from '../utils/teacherStudios.js';
 import { sanitizeRichText } from '../utils/sanitizeHtml.js';
+import { ensureLinkedStudentForTeacher, tryResolveBookerStudentId } from '../utils/booker.js';
 
 export const teachersRouter = Router();
 
@@ -31,6 +32,7 @@ const profileSchema = z.object({
   trackPayments: z.boolean().optional(),
   receiveEmails: z.boolean().optional(),
   isActive: z.boolean().optional(),
+  canBookAsStudent: z.boolean().optional(),
 });
 
 function mapTeacherProfile(row) {
@@ -47,6 +49,7 @@ function mapTeacherProfile(row) {
     trackPayments: row.track_payments === true,
     receiveEmails: row.receive_emails !== false,
     isActive: row.is_active !== false,
+    canBookAsStudent: row.can_book_as_student === true,
   };
 }
 
@@ -113,6 +116,7 @@ teachersRouter.patch(
       trackPayments: 'track_payments',
       receiveEmails: 'receive_emails',
       isActive: 'is_active',
+      canBookAsStudent: 'can_book_as_student',
     };
     const richTextKeys = new Set(['additionalInfo', 'teachingPolicies']);
     const fields = [];
@@ -134,7 +138,23 @@ teachersRouter.patch(
       `UPDATE teachers SET ${fields.join(', ')} WHERE id = $${idx} RETURNING *`,
       values,
     );
-    res.json({ teacher: mapTeacherProfile(rows[0]) });
+    const teacher = rows[0];
+    if (teacher.can_book_as_student) {
+      await ensureLinkedStudentForTeacher(teacher.id);
+    } else if (
+      data.fullName !== undefined ||
+      data.phone !== undefined
+    ) {
+      // Keep an existing linked student profile roughly in sync even if booking is off.
+      await query(
+        `UPDATE students s
+            SET full_name = t.full_name, phone = t.phone
+           FROM teachers t
+          WHERE t.id = $1 AND s.email = t.email`,
+        [teacher.id],
+      );
+    }
+    res.json({ teacher: mapTeacherProfile(teacher) });
   }),
 );
 
@@ -404,11 +424,12 @@ teachersRouter.get(
       booked = bookedRes.rows;
       pending = pendingRes.rows;
       exceptions = exceptionsRes.rows;
-      if (req.user?.role === 'student') {
+      const bookerId = await tryResolveBookerStudentId(req.user);
+      if (bookerId) {
         const { rows } = await query(
           `SELECT slot_id FROM recurring_assignments
             WHERE status = 'pending' AND student_id = $1 AND slot_id = ANY($2::int[])`,
-          [req.user.id, slotIds],
+          [bookerId, slotIds],
         );
         myPending = rows;
       }
@@ -423,7 +444,7 @@ teachersRouter.get(
     const exceptionBySlot = new Map(
       exceptions.map((e) => [e.slot_id, e.kind]),
     );
-    const meId = req.user?.role === 'student' ? req.user.id : null;
+    const meId = await tryResolveBookerStudentId(req.user);
 
     const result = slots.map((s) => {
       const lessonDate = dateForWeekday(monday, s.weekday);

@@ -40,6 +40,7 @@ export default function Profile() {
     childrenNames: [''],
     trackPayments: false,
     isActive: true,
+    canBookAsStudent: false,
     bio: '',
     defaultPrice: '74',
     defaultDurationMin: '45',
@@ -58,6 +59,7 @@ export default function Profile() {
         isParent: false,
         childrenNames: [''],
         isActive: t.isActive !== false,
+        canBookAsStudent: t.canBookAsStudent === true,
         bio: t.bio || '',
         trackPayments: t.trackPayments === true,
         defaultPrice: String((t.defaultPriceCents || 7400) / 100),
@@ -102,6 +104,7 @@ export default function Profile() {
             trackPayments: form.trackPayments,
             receiveEmails: form.receiveEmails,
             isActive: form.isActive,
+            canBookAsStudent: form.canBookAsStudent,
           },
         });
 
@@ -127,8 +130,13 @@ export default function Profile() {
       toast('Profile saved.');
       setError('');
       await refresh();
-      await studentQuery.refetch();
-      navigate('/');
+      if (isTeacher) {
+        await teacherQuery.refetch();
+        await myStudiosQuery.refetch();
+      } else {
+        await studentQuery.refetch();
+      }
+      navigate(isTeacher ? '/teacher' : '/');
     },
     onError: (err) => {
       if (err.message === '__cancelled__') return;
@@ -280,6 +288,29 @@ export default function Profile() {
                     className={`switch${form.isActive ? ' on' : ''}`}
                     aria-pressed={form.isActive}
                     aria-label="Toggle studio listing"
+                  />
+                </div>
+              </div>
+              <div className={`recurring-toggle${form.canBookAsStudent ? ' active' : ''}`}>
+                <div
+                  className="recurring-toggle-row"
+                  onClick={() =>
+                    setForm((f) => ({ ...f, canBookAsStudent: !f.canBookAsStudent }))
+                  }
+                >
+                  <div className="recurring-toggle-label">
+                    <strong>Student as well?</strong>
+                    <span>
+                      {form.canBookAsStudent
+                        ? "You can book lessons on other teachers' schedules."
+                        : 'Turn on to book lessons with other instructors.'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className={`switch${form.canBookAsStudent ? ' on' : ''}`}
+                    aria-pressed={form.canBookAsStudent}
+                    aria-label="Toggle student booking access"
                   />
                 </div>
               </div>

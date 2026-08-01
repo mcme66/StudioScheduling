@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db.js';
 import { asyncHandler, HttpError } from '../middleware/error.js';
-import { requireRole } from '../middleware/auth.js';
+import { requireAuth, requireRole } from '../middleware/auth.js';
+import { resolveBookerStudentId } from '../utils/booker.js';
 
 export const studentsRouter = Router();
 
@@ -44,9 +45,11 @@ function mapStudent(row) {
 
 studentsRouter.get(
   '/me',
-  requireRole('student'),
+  requireAuth,
   asyncHandler(async (req, res) => {
-    const { rows } = await query('SELECT * FROM students WHERE id = $1', [req.user.id]);
+    // Students, or teachers with “Student as well?” enabled (linked student row).
+    const studentId = await resolveBookerStudentId(req.user);
+    const { rows } = await query('SELECT * FROM students WHERE id = $1', [studentId]);
     if (!rows[0]) throw new HttpError(401, 'Account no longer exists.');
     res.json({ student: mapStudent(rows[0]) });
   }),

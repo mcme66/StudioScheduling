@@ -19,6 +19,11 @@ export default function Layout() {
               <NavLink to="/teacher" className="header-nav-pill">
                 Dashboard
               </NavLink>
+              {user.canBookAsStudent && (
+                <NavLink to="/my-lessons" className="header-nav-pill">
+                  My Lessons
+                </NavLink>
+              )}
               <Link to="/profile" className="header-nav-pill">
                 {user.fullName}
               </Link>

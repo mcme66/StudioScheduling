@@ -62,6 +62,7 @@ function publicUser(row, role) {
           bio: row.bio || null,
           defaultPriceCents: row.default_price_cents,
           defaultDurationMin: row.default_duration_min,
+          canBookAsStudent: row.can_book_as_student === true,
         }
       : {}),
   };
@@ -204,6 +205,19 @@ authRouter.post(
         WHERE id = $2`,
       [passwordHash, row.id],
     );
+
+    // Keep the linked student login in sync when a teacher resets their password.
+    if (data.role === 'teacher') {
+      await query(
+        `UPDATE students s
+            SET password_hash = $1
+           FROM teachers t
+          WHERE t.id = $2
+            AND t.can_book_as_student = true
+            AND s.email = t.email`,
+        [passwordHash, row.id],
+      );
+    }
 
     res.json({ ok: true });
   }),

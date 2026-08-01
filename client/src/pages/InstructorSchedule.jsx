@@ -53,10 +53,12 @@ export default function InstructorSchedule() {
     refetchInterval: 15000,
   });
 
+  const canBook =
+    user?.role === 'student' || (user?.role === 'teacher' && user?.canBookAsStudent === true);
   const profileQuery = useQuery({
     queryKey: ['student-profile'],
     queryFn: () => api('/students/me'),
-    enabled: user?.role === 'student',
+    enabled: !!canBook,
   });
   const isParent = profileQuery.data?.student?.isParent === true;
   const childrenNames = (profileQuery.data?.student?.childrenNames || []).filter(Boolean);
@@ -158,7 +160,20 @@ export default function InstructorSchedule() {
 
   const selectSlot = (slot) => {
     if (!isSlotBookable(slot)) return;
-    if (!user || user.role !== 'student') {
+    if (!user) {
+      navigate('/student/login', { state: { from: location } });
+      return;
+    }
+    if (user.role === 'teacher' && user.id === Number(teacherId)) {
+      toast('You cannot book a lesson on your own schedule.');
+      return;
+    }
+    if (!canBook) {
+      if (user.role === 'teacher') {
+        toast('Turn on “Student as well?” in your profile to book lessons.');
+        navigate('/profile');
+        return;
+      }
       navigate('/student/login', { state: { from: location } });
       return;
     }
@@ -192,13 +207,22 @@ export default function InstructorSchedule() {
       </h1>
       {data?.teacher?.bio && <p className="page-sub">{data.teacher.bio}</p>}
 
-      {(!user || user.role !== 'student') && !isOwner && (
+      {!canBook && !isOwner && (
         <div className="card" style={{ marginBottom: '1.25rem', fontSize: '14px' }}>
           Browse open times below.{' '}
-          <Link to="/student/login" state={{ from: location }}>
-            Log in as a student
-          </Link>{' '}
-          to book a lesson.
+          {user?.role === 'teacher' ? (
+            <>
+              <Link to="/profile">Turn on “Student as well?”</Link> on your profile to book a
+              lesson with another instructor.
+            </>
+          ) : (
+            <>
+              <Link to="/student/login" state={{ from: location }}>
+                Log in as a student
+              </Link>{' '}
+              to book a lesson.
+            </>
+          )}
         </div>
       )}
 

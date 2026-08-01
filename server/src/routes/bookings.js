@@ -12,6 +12,7 @@ import {
 } from '../utils/week.js';
 import { sendBookingConfirmation } from '../services/email.js';
 import { normalizeChildrenNames } from './students.js';
+import { resolveBookerStudentId } from '../utils/booker.js';
 
 export const bookingsRouter = Router();
 
@@ -66,9 +67,7 @@ bookingsRouter.post(
   '/',
   requireAuth,
   asyncHandler(async (req, res) => {
-    if (req.user.role !== 'student') {
-      throw new HttpError(403, 'Only students can book lessons.');
-    }
+    const bookerStudentId = await resolveBookerStudentId(req.user);
     const { slotId, lessonDate, childName: requestedChildName } = createSchema.parse(req.body);
 
     if (lessonDate < todayISO()) {
@@ -76,7 +75,7 @@ bookingsRouter.post(
     }
 
     const booking = await withTransaction(async (client) => {
-      const childName = await resolveChildName(client, req.user.id, requestedChildName);
+      const childName = await resolveChildName(client, bookerStudentId, requestedChildName);
 
       const { rows: slotRows } = await client.query(
         'SELECT * FROM slots WHERE id = $1 FOR UPDATE',
@@ -84,6 +83,11 @@ bookingsRouter.post(
       );
       const slot = slotRows[0];
       if (!slot || !slot.active) throw new HttpError(404, 'That lesson time is not available.');
+
+      // Teachers-as-students may only book other instructors.
+      if (req.user.role === 'teacher' && slot.teacher_id === req.user.id) {
+        throw new HttpError(400, 'You cannot book a lesson on your own schedule.');
+      }
 
       if (isLessonPast(lessonDate, slot.start_time)) {
         throw new HttpError(400, 'That lesson time has already passed.');
@@ -127,7 +131,7 @@ bookingsRouter.post(
       // A skipped week reopens the slot for anyone, so the weekly holder does
       // not block bookings on that specific date.
       if (recRows[0] && !skippedThisWeek) {
-        if (recRows[0].student_id === req.user.id) {
+        if (recRows[0].student_id === bookerStudentId) {
           throw new HttpError(409, 'You already hold this time as a weekly spot.');
         }
         throw new HttpError(409, 'This time is reserved for a weekly student.');
@@ -137,14 +141,14 @@ bookingsRouter.post(
         "SELECT student_id FROM recurring_assignments WHERE slot_id = $1 AND status = 'pending'",
         [slotId],
       );
-      if (pendingRows[0] && pendingRows[0].student_id !== req.user.id) {
+      if (pendingRows[0] && pendingRows[0].student_id !== bookerStudentId) {
         throw new HttpError(409, 'This time has a pending weekly spot request.');
       }
 
       const { rows } = await client.query(
         `INSERT INTO bookings (slot_id, student_id, lesson_date, child_name)
          VALUES ($1, $2, $3, $4) RETURNING *`,
-        [slotId, req.user.id, lessonDate, childName],
+        [slotId, bookerStudentId, lessonDate, childName],
       ).catch((err) => {
         if (err?.code === '23505') {
           throw new HttpError(409, 'That time was just booked. Please choose another.');
@@ -156,7 +160,7 @@ bookingsRouter.post(
 
     // Send confirmation (best-effort) after the transaction commits.
     const [{ rows: studentRows }, { rows: teacherRows }] = await Promise.all([
-      query('SELECT full_name, email, receive_emails FROM students WHERE id = $1', [req.user.id]),
+      query('SELECT full_name, email, receive_emails FROM students WHERE id = $1', [bookerStudentId]),
       query('SELECT full_name FROM teachers WHERE id = $1', [booking.slot.teacher_id]),
     ]);
     await sendBookingConfirmation({
@@ -183,9 +187,7 @@ bookingsRouter.get(
   '/me',
   requireAuth,
   asyncHandler(async (req, res) => {
-    if (req.user.role !== 'student') {
-      throw new HttpError(403, 'Only students have personal bookings.');
-    }
+    const bookerStudentId = await resolveBookerStudentId(req.user);
     const { rows: bookings } = await query(
       `SELECT b.id, b.lesson_date, b.status, b.created_at, b.paid, b.child_name,
               s.weekday, s.start_time, s.duration_min, s.price_cents,
@@ -195,7 +197,7 @@ bookingsRouter.get(
          JOIN teachers t ON t.id = s.teacher_id
         WHERE b.student_id = $1 AND b.status = 'booked'
         ORDER BY b.lesson_date`,
-      [req.user.id],
+      [bookerStudentId],
     );
 
     const { rows: recurring } = await query(
@@ -206,7 +208,7 @@ bookingsRouter.get(
          JOIN teachers t ON t.id = s.teacher_id
         WHERE ra.student_id = $1 AND ra.status = 'approved'
         ORDER BY s.weekday, s.start_time`,
-      [req.user.id],
+      [bookerStudentId],
     );
 
     const today = todayISO();
@@ -302,7 +304,11 @@ bookingsRouter.patch(
       throw new HttpError(403, 'This instructor does not track payments.');
     }
 
-    const isOwnerStudent = req.user.role === 'student' && booking.student_id === req.user.id;
+    const bookerStudentId =
+      req.user.role === 'student' || req.user.role === 'teacher'
+        ? await resolveBookerStudentId(req.user).catch(() => null)
+        : null;
+    const isOwnerStudent = bookerStudentId != null && booking.student_id === bookerStudentId;
     const isOwnerTeacher = req.user.role === 'teacher' && booking.teacher_id === req.user.id;
     if (!isOwnerStudent && !isOwnerTeacher) {
       throw new HttpError(403, 'You cannot update payment for this booking.');
@@ -330,7 +336,11 @@ bookingsRouter.delete(
       throw new HttpError(404, 'Booking not found.');
     }
 
-    const isOwnerStudent = req.user.role === 'student' && booking.student_id === req.user.id;
+    const bookerStudentId =
+      req.user.role === 'student' || req.user.role === 'teacher'
+        ? await resolveBookerStudentId(req.user).catch(() => null)
+        : null;
+    const isOwnerStudent = bookerStudentId != null && booking.student_id === bookerStudentId;
     const isOwnerTeacher = req.user.role === 'teacher' && booking.teacher_id === req.user.id;
     if (!isOwnerStudent && !isOwnerTeacher) {
       throw new HttpError(403, 'You cannot cancel this booking.');

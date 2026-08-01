@@ -14,7 +14,9 @@ export default function RequireAuth({ role, children }) {
     const loginPath = role ? LOGIN_PATH[role] : '/student/login';
     return <Navigate to={loginPath} state={{ from: location }} replace />;
   }
-  if (role && user.role !== role) {
+  const teacherBookerOk =
+    role === 'student' && user.role === 'teacher' && user.canBookAsStudent === true;
+  if (role && user.role !== role && !teacherBookerOk) {
     return <Navigate to={user.role === 'teacher' ? '/teacher' : '/'} replace />;
   }
   return children;
