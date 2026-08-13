@@ -39,6 +39,8 @@ export default function InstructorSchedule() {
   const [wantsRecurring, setWantsRecurring] = useState(false);
   const [childPickerOpen, setChildPickerOpen] = useState(false);
   const [selectedChild, setSelectedChild] = useState(null);
+  const [partnerPickerOpen, setPartnerPickerOpen] = useState(false);
+  const [selectedPaymentPartnerId, setSelectedPaymentPartnerId] = useState(undefined);
   const [calendarTarget, setCalendarTarget] = useState(null);
   const confirmRef = useRef(null);
 
@@ -62,6 +64,12 @@ export default function InstructorSchedule() {
   });
   const isParent = profileQuery.data?.student?.isParent === true;
   const childrenNames = (profileQuery.data?.student?.childrenNames || []).filter(Boolean);
+  const partnersQuery = useQuery({
+    queryKey: ['my-partners'],
+    queryFn: () => api('/students/me/partners'),
+    enabled: !!canBook,
+  });
+  const partners = partnersQuery.data?.partners || [];
 
   // If the current week has no bookable slots left, jump ahead to the next week.
   useEffect(() => {
@@ -80,19 +88,25 @@ export default function InstructorSchedule() {
   }, [selected]);
 
   const bookMutation = useMutation({
-    mutationFn: async ({ slot, recurring, childName }) => {
+    mutationFn: async ({ slot, recurring, childName, paymentPartnerId }) => {
       await api('/bookings', {
         method: 'POST',
         body: {
           slotId: slot.id,
           lessonDate: slot.lessonDate,
           ...(childName ? { childName } : {}),
+          ...(paymentPartnerId ? { paymentPartnerId } : {}),
         },
       });
       if (recurring) {
         await api('/recurring', {
           method: 'POST',
-          body: { slotId: slot.id, ...(childName ? { childName } : {}) },
+          body: {
+            slotId: slot.id,
+            ...(childName ? { childName } : {}),
+            ...(paymentPartnerId ? { paymentPartnerId } : {}),
+            lessonDate: slot.lessonDate,
+          },
         });
       }
     },
@@ -109,7 +123,9 @@ export default function InstructorSchedule() {
       setSelected(null);
       setWantsRecurring(false);
       setSelectedChild(null);
+      setSelectedPaymentPartnerId(undefined);
       setChildPickerOpen(false);
+      setPartnerPickerOpen(false);
       queryClient.invalidateQueries({ queryKey });
     },
     onError: (err) => {
@@ -117,6 +133,15 @@ export default function InstructorSchedule() {
       queryClient.invalidateQueries({ queryKey });
     },
   });
+
+  const submitBooking = (childName, paymentPartnerId) => {
+    bookMutation.mutate({
+      slot: selected,
+      recurring: wantsRecurring,
+      childName,
+      paymentPartnerId: paymentPartnerId || null,
+    });
+  };
 
   const startBooking = () => {
     if (!selected) return;
@@ -126,24 +151,32 @@ export default function InstructorSchedule() {
         navigate('/profile');
         return;
       }
-      if (selectedChild) {
-        bookMutation.mutate({
-          slot: selected,
-          recurring: wantsRecurring,
-          childName: selectedChild,
-        });
+      if (!selectedChild) {
+        setChildPickerOpen(true);
         return;
       }
-      setChildPickerOpen(true);
+    }
+    if (partners.length && selectedPaymentPartnerId === undefined) {
+      setPartnerPickerOpen(true);
       return;
     }
-    bookMutation.mutate({ slot: selected, recurring: wantsRecurring });
+    submitBooking(isParent ? selectedChild : null, selectedPaymentPartnerId ?? null);
   };
 
   const confirmChildBooking = (childName) => {
     setSelectedChild(childName);
     setChildPickerOpen(false);
-    bookMutation.mutate({ slot: selected, recurring: wantsRecurring, childName });
+    if (partners.length) {
+      setPartnerPickerOpen(true);
+      return;
+    }
+    submitBooking(childName, null);
+  };
+
+  const confirmPartnerBooking = (partnerId) => {
+    setSelectedPaymentPartnerId(partnerId);
+    setPartnerPickerOpen(false);
+    submitBooking(isParent ? selectedChild : null, partnerId);
   };
 
   const grouped = useMemo(() => {
@@ -180,14 +213,25 @@ export default function InstructorSchedule() {
     setSelected(slot);
     setWantsRecurring(false);
     setSelectedChild(null);
+    setSelectedPaymentPartnerId(undefined);
     setChildPickerOpen(false);
+    setPartnerPickerOpen(false);
   };
+
+  const partnerSlotName = (slot) =>
+    slot.bookedByPartner?.childName || slot.bookedByPartner?.name || '';
 
   const statusLabel = (slot, past) => {
     if (past) return 'Already passed';
     if (slot.mine && slot.status === 'recurring') return 'Your weekly spot';
     if (slot.mine && slot.status === 'booked') return 'Booked by you';
     if (slot.mine && slot.status === 'pending') return 'Weekly spot pending';
+    if (slot.bookedByPartner) {
+      const who = partnerSlotName(slot);
+      if (slot.status === 'recurring') return `Weekly · ${who}`;
+      if (slot.status === 'booked') return `Booked by ${who}`;
+      if (slot.status === 'pending') return `Pending · ${who}`;
+    }
     if (slot.status === 'recurring') return 'Weekly · reserved';
     if (slot.status === 'booked') return 'Booked';
     if (slot.status === 'pending') return 'Pending';
@@ -288,14 +332,15 @@ export default function InstructorSchedule() {
           </div>
           <div className="day-group-slots">
             {slots.map((slot) => {
-              const past = slot.status === 'open' && isSlotPast(slot.lessonDate, slot.startTime);
+              const past = isSlotPast(slot.lessonDate, slot.startTime);
               const taken = slot.status !== 'open';
               const disabled = taken || past;
               const cls = ['slot-card'];
-              if (slot.mine) cls.push('mine');
-              else if (past) cls.push('past');
+              if (past) cls.push('past');
+              else if (slot.mine) cls.push('mine');
+              else if (slot.bookedByPartner) cls.push('partner');
               else if (taken) cls.push('taken');
-              if (slot.status === 'pending') cls.push('pending');
+              if (!past && slot.status === 'pending') cls.push('pending');
               if (selected?.id === slot.id) cls.push('selected');
               return (
                 <div
@@ -329,9 +374,11 @@ export default function InstructorSchedule() {
                           ? '#8a8578'
                           : slot.mine
                             ? 'var(--green)'
-                            : slot.status === 'pending'
-                              ? '#a05a00'
-                              : 'var(--muted)',
+                            : slot.bookedByPartner
+                              ? 'var(--partner)'
+                              : slot.status === 'pending'
+                                ? '#a05a00'
+                                : 'var(--muted)',
                       }}
                     >
                       {statusLabel(slot, past)}
@@ -370,7 +417,7 @@ export default function InstructorSchedule() {
               <div className="recurring-toggle-row" onClick={() => setWantsRecurring((v) => !v)}>
                 <div className="recurring-toggle-label">
                   <strong>Make this a weekly spot</strong>
-                  <span>Request this same time every week</span>
+                  <span>Weekly from this week forward</span>
                 </div>
                 <button
                   type="button"
@@ -389,6 +436,7 @@ export default function InstructorSchedule() {
               onClick={() => {
                 setSelected(null);
                 setSelectedChild(null);
+                setSelectedPaymentPartnerId(undefined);
               }}
               disabled={bookMutation.isPending}
             >
@@ -405,9 +453,11 @@ export default function InstructorSchedule() {
                 ? 'Booking…'
                 : isParent && !selectedChild
                   ? 'Choose child & book'
-                  : isParent && selectedChild
-                    ? `Book for ${selectedChild}`
-                    : `Book ${fmtTime(selected.startTime)}`}
+                  : partners.length && selectedPaymentPartnerId === undefined
+                    ? 'Choose partner & book'
+                    : isParent && selectedChild
+                      ? `Book for ${selectedChild}`
+                      : `Book ${fmtTime(selected.startTime)}`}
             </button>
           </div>
         </div>
@@ -433,6 +483,36 @@ export default function InstructorSchedule() {
             description="Go back without booking"
             disabled={bookMutation.isPending}
             onClick={() => setChildPickerOpen(false)}
+          />
+        </Modal>
+      )}
+
+      {partnerPickerOpen && (
+        <Modal
+          title="Split payment with a partner?"
+          subtitle="All of your partners can still see this lesson. This only chooses who can mark their half as paid."
+          onClose={() => !bookMutation.isPending && setPartnerPickerOpen(false)}
+        >
+          {partners.map((p) => (
+            <ModalOption
+              key={p.id}
+              label={p.fullName}
+              description="This partner can mark their half as paid"
+              disabled={bookMutation.isPending}
+              onClick={() => confirmPartnerBooking(p.id)}
+            />
+          ))}
+          <ModalOption
+            label="Just me"
+            description="Only you mark this lesson as paid"
+            disabled={bookMutation.isPending}
+            onClick={() => confirmPartnerBooking(null)}
+          />
+          <ModalOption
+            label="Cancel"
+            description="Go back without booking"
+            disabled={bookMutation.isPending}
+            onClick={() => setPartnerPickerOpen(false)}
           />
         </Modal>
       )}

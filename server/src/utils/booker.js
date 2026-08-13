@@ -1,5 +1,6 @@
 import { query } from '../db.js';
 import { HttpError } from '../middleware/error.js';
+import { allocatePartnerCode } from './partners.js';
 
 /**
  * Ensure a teacher who can book as a student has a students row with the same
@@ -23,11 +24,12 @@ export async function ensureLinkedStudentForTeacher(teacherId) {
     return existing[0].id;
   }
 
+  const partnerCode = await allocatePartnerCode();
   const { rows: created } = await query(
-    `INSERT INTO students (email, password_hash, full_name, phone)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO students (email, password_hash, full_name, phone, partner_code)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING id`,
-    [teacher.email, teacher.password_hash, teacher.full_name, teacher.phone],
+    [teacher.email, teacher.password_hash, teacher.full_name, teacher.phone, partnerCode],
   );
   return created[0].id;
 }

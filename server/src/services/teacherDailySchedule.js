@@ -47,6 +47,7 @@ async function fetchLessonsForTeacher(teacherId, lessonDate, weekday) {
            JOIN students st ON st.id = ra.student_id
           WHERE s.teacher_id = $1
             AND ra.status = 'approved'
+            AND (ra.starts_on IS NULL OR ra.starts_on <= $2::date)
             AND s.weekday = $3
             AND (s.series_start_date IS NULL OR s.series_start_date <= $2::date)
             AND (s.series_end_date IS NULL OR s.series_end_date >= $2::date)

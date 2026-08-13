@@ -13,6 +13,11 @@ import {
 import { sendBookingConfirmation } from '../services/email.js';
 import { normalizeChildrenNames } from './students.js';
 import { resolveBookerStudentId } from '../utils/booker.js';
+import {
+  partnerIdsFor,
+  paymentPartnerPayload,
+  resolvePaymentPartnerId,
+} from '../utils/partners.js';
 
 export const bookingsRouter = Router();
 
@@ -23,6 +28,7 @@ const createSchema = z.object({
   slotId: z.number().int().positive(),
   lessonDate: z.string().refine(isValidDateStr, 'lessonDate must be YYYY-MM-DD.'),
   childName: z.string().max(120).optional().nullable(),
+  paymentPartnerId: z.number().int().positive().optional().nullable(),
 });
 
 /** Resolve which child name (if any) a parent account is booking for. */
@@ -68,7 +74,12 @@ bookingsRouter.post(
   requireAuth,
   asyncHandler(async (req, res) => {
     const bookerStudentId = await resolveBookerStudentId(req.user);
-    const { slotId, lessonDate, childName: requestedChildName } = createSchema.parse(req.body);
+    const {
+      slotId,
+      lessonDate,
+      childName: requestedChildName,
+      paymentPartnerId: requestedPartnerId,
+    } = createSchema.parse(req.body);
 
     if (lessonDate < todayISO()) {
       throw new HttpError(400, 'That date is in the past.');
@@ -76,6 +87,11 @@ bookingsRouter.post(
 
     const booking = await withTransaction(async (client) => {
       const childName = await resolveChildName(client, bookerStudentId, requestedChildName);
+      const paymentPartnerId = await resolvePaymentPartnerId(
+        bookerStudentId,
+        requestedPartnerId,
+        (text, params) => client.query(text, params),
+      );
 
       const { rows: slotRows } = await client.query(
         'SELECT * FROM slots WHERE id = $1 FOR UPDATE',
@@ -125,12 +141,17 @@ bookingsRouter.post(
       const skippedThisWeek = exception?.kind === 'skipped';
 
       const { rows: recRows } = await client.query(
-        "SELECT student_id FROM recurring_assignments WHERE slot_id = $1 AND status = 'approved'",
+        `SELECT student_id, starts_on FROM recurring_assignments
+          WHERE slot_id = $1 AND status = 'approved'`,
         [slotId],
       );
       // A skipped week reopens the slot for anyone, so the weekly holder does
-      // not block bookings on that specific date.
-      if (recRows[0] && !skippedThisWeek) {
+      // not block bookings on that specific date. Weeks before the weekly
+      // assignment starts stay open for one-off bookings.
+      const recCovers =
+        recRows[0] &&
+        (!recRows[0].starts_on || lessonDate >= fmtDate(recRows[0].starts_on));
+      if (recCovers && !skippedThisWeek) {
         if (recRows[0].student_id === bookerStudentId) {
           throw new HttpError(409, 'You already hold this time as a weekly spot.');
         }
@@ -138,24 +159,29 @@ bookingsRouter.post(
       }
 
       const { rows: pendingRows } = await client.query(
-        "SELECT student_id FROM recurring_assignments WHERE slot_id = $1 AND status = 'pending'",
+        `SELECT student_id, starts_on FROM recurring_assignments
+          WHERE slot_id = $1 AND status = 'pending'`,
         [slotId],
       );
-      if (pendingRows[0] && pendingRows[0].student_id !== bookerStudentId) {
+      const pendingCovers =
+        pendingRows[0] &&
+        pendingRows[0].student_id !== bookerStudentId &&
+        (!pendingRows[0].starts_on || lessonDate >= fmtDate(pendingRows[0].starts_on));
+      if (pendingCovers) {
         throw new HttpError(409, 'This time has a pending weekly spot request.');
       }
 
       const { rows } = await client.query(
-        `INSERT INTO bookings (slot_id, student_id, lesson_date, child_name)
-         VALUES ($1, $2, $3, $4) RETURNING *`,
-        [slotId, bookerStudentId, lessonDate, childName],
+        `INSERT INTO bookings (slot_id, student_id, lesson_date, child_name, payment_partner_id)
+         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+        [slotId, bookerStudentId, lessonDate, childName, paymentPartnerId],
       ).catch((err) => {
         if (err?.code === '23505') {
           throw new HttpError(409, 'That time was just booked. Please choose another.');
         }
         throw err;
       });
-      return { booking: rows[0], slot, childName };
+      return { booking: rows[0], slot, childName, paymentPartnerId };
     });
 
     // Send confirmation (best-effort) after the transaction commits.
@@ -178,6 +204,7 @@ bookingsRouter.post(
         lessonDate,
         status: booking.booking.status,
         childName: booking.childName,
+        paymentPartnerId: booking.paymentPartnerId,
       },
     });
   }),
@@ -188,27 +215,38 @@ bookingsRouter.get(
   requireAuth,
   asyncHandler(async (req, res) => {
     const bookerStudentId = await resolveBookerStudentId(req.user);
+    const partnerIds = await partnerIdsFor(bookerStudentId);
+    const visibleIds = [bookerStudentId, ...partnerIds];
+
     const { rows: bookings } = await query(
-      `SELECT b.id, b.lesson_date, b.status, b.created_at, b.paid, b.child_name,
+      `SELECT b.id, b.lesson_date, b.status, b.created_at, b.paid, b.partner_paid, b.child_name,
+              b.student_id, b.payment_partner_id,
+              st.full_name AS booker_name, pp.full_name AS payment_partner_name,
               s.weekday, s.start_time, s.duration_min, s.price_cents,
               t.id AS teacher_id, t.full_name AS teacher_name, t.track_payments
          FROM bookings b
          JOIN slots s ON s.id = b.slot_id
          JOIN teachers t ON t.id = s.teacher_id
-        WHERE b.student_id = $1 AND b.status = 'booked'
+         JOIN students st ON st.id = b.student_id
+         LEFT JOIN students pp ON pp.id = b.payment_partner_id
+        WHERE b.student_id = ANY($1::int[]) AND b.status = 'booked'
         ORDER BY b.lesson_date`,
-      [bookerStudentId],
+      [visibleIds],
     );
 
     const { rows: recurring } = await query(
-      `SELECT ra.id, ra.slot_id, ra.child_name, s.weekday, s.start_time, s.duration_min, s.price_cents,
+      `SELECT ra.id, ra.slot_id, ra.child_name, ra.student_id, ra.payment_partner_id, ra.starts_on,
+              st.full_name AS booker_name, pp.full_name AS payment_partner_name,
+              s.weekday, s.start_time, s.duration_min, s.price_cents,
               t.id AS teacher_id, t.full_name AS teacher_name, t.track_payments
          FROM recurring_assignments ra
          JOIN slots s ON s.id = ra.slot_id
          JOIN teachers t ON t.id = s.teacher_id
-        WHERE ra.student_id = $1 AND ra.status = 'approved'
+         JOIN students st ON st.id = ra.student_id
+         LEFT JOIN students pp ON pp.id = ra.payment_partner_id
+        WHERE ra.student_id = ANY($1::int[]) AND ra.status = 'approved'
         ORDER BY s.weekday, s.start_time`,
-      [bookerStudentId],
+      [visibleIds],
     );
 
     const today = todayISO();
@@ -233,7 +271,7 @@ bookingsRouter.get(
     if (recurring.length) {
       const recurringIds = recurring.map((r) => r.id);
       const { rows: payRows } = await query(
-        `SELECT recurring_assignment_id, lesson_date, paid
+        `SELECT recurring_assignment_id, lesson_date, paid, partner_paid
            FROM recurring_lesson_payments
           WHERE recurring_assignment_id = ANY($1::int[])
             AND lesson_date >= $2`,
@@ -245,38 +283,74 @@ bookingsRouter.get(
         paymentsByRecurring.get(rid).push({
           date: fmtDate(p.lesson_date),
           paid: p.paid === true,
+          partnerPaid: p.partner_paid === true,
         });
       }
     }
-    const mapped = bookings.map((b) => ({
-      id: b.id,
-      lessonDate: fmtDate(b.lesson_date),
-      startTime: fmtTime(b.start_time),
-      durationMin: b.duration_min,
-      priceCents: b.price_cents,
-      paid: b.paid === true,
-      trackPayments: b.track_payments === true,
-      childName: b.child_name || null,
-      teacher: { id: b.teacher_id, name: b.teacher_name },
-      past: fmtDate(b.lesson_date) < today,
-    }));
+
+    const accessFor = (row) => {
+      const isBooker = row.student_id === bookerStudentId;
+      const isPaymentPartner = row.payment_partner_id === bookerStudentId;
+      return {
+        isPartner: !isBooker,
+        partnerName: isBooker ? null : row.booker_name || null,
+        paymentPartner: paymentPartnerPayload(row.payment_partner_id, row.payment_partner_name),
+        canMarkPaid: isBooker || isPaymentPartner,
+        canManage: isBooker,
+        isPaymentPartner,
+      };
+    };
+
+    const mapped = bookings.map((b) => {
+      const access = accessFor(b);
+      return {
+        id: b.id,
+        lessonDate: fmtDate(b.lesson_date),
+        startTime: fmtTime(b.start_time),
+        durationMin: b.duration_min,
+        priceCents: b.price_cents,
+        paid: access.isPaymentPartner ? b.partner_paid === true : b.paid === true,
+        trackPayments: b.track_payments === true,
+        childName: b.child_name || null,
+        teacher: { id: b.teacher_id, name: b.teacher_name },
+        past: fmtDate(b.lesson_date) < today,
+        isPartner: access.isPartner,
+        partnerName: access.partnerName,
+        paymentPartner: access.paymentPartner,
+        canMarkPaid: access.canMarkPaid,
+        canManage: access.canManage,
+      };
+    });
 
     res.json({
       upcoming: mapped.filter((b) => !b.past),
       past: mapped.filter((b) => b.past).reverse(),
-      recurring: recurring.map((r) => ({
-        id: r.id,
-        slotId: r.slot_id,
-        weekday: r.weekday,
-        startTime: fmtTime(r.start_time),
-        durationMin: r.duration_min,
-        priceCents: r.price_cents,
-        trackPayments: r.track_payments === true,
-        childName: r.child_name || null,
-        teacher: { id: r.teacher_id, name: r.teacher_name },
-        exceptions: exceptionsBySlot.get(r.slot_id) || [],
-        payments: paymentsByRecurring.get(r.id) || [],
-      })),
+      recurring: recurring.map((r) => {
+        const access = accessFor(r);
+        const rawPayments = paymentsByRecurring.get(r.id) || [];
+        return {
+          id: r.id,
+          slotId: r.slot_id,
+          weekday: r.weekday,
+          startTime: fmtTime(r.start_time),
+          durationMin: r.duration_min,
+          priceCents: r.price_cents,
+          trackPayments: r.track_payments === true,
+          childName: r.child_name || null,
+          startsOn: r.starts_on ? fmtDate(r.starts_on) : null,
+          teacher: { id: r.teacher_id, name: r.teacher_name },
+          exceptions: exceptionsBySlot.get(r.slot_id) || [],
+          payments: rawPayments.map((p) => ({
+            date: p.date,
+            paid: access.isPaymentPartner ? p.partnerPaid : p.paid,
+          })),
+          isPartner: access.isPartner,
+          partnerName: access.partnerName,
+          paymentPartner: access.paymentPartner,
+          canMarkPaid: access.canMarkPaid,
+          canManage: access.canManage,
+        };
+      }),
     });
   }),
 );
@@ -309,16 +383,36 @@ bookingsRouter.patch(
         ? await resolveBookerStudentId(req.user).catch(() => null)
         : null;
     const isOwnerStudent = bookerStudentId != null && booking.student_id === bookerStudentId;
+    const isPaymentPartner =
+      bookerStudentId != null && booking.payment_partner_id === bookerStudentId;
     const isOwnerTeacher = req.user.role === 'teacher' && booking.teacher_id === req.user.id;
-    if (!isOwnerStudent && !isOwnerTeacher) {
+    if (!isOwnerStudent && !isPaymentPartner && !isOwnerTeacher) {
       throw new HttpError(403, 'You cannot update payment for this booking.');
     }
 
-    const { rows: updated } = await query(
-      'UPDATE bookings SET paid = $1 WHERE id = $2 RETURNING id, paid',
-      [paid, id],
-    );
-    res.json({ booking: { id: updated[0].id, paid: updated[0].paid === true } });
+    let updated;
+    if (isOwnerTeacher) {
+      const result = await query(
+        'UPDATE bookings SET paid = $1, partner_paid = $1 WHERE id = $2 RETURNING id, paid, partner_paid',
+        [paid, id],
+      );
+      updated = result.rows[0];
+    } else if (isPaymentPartner && !isOwnerStudent) {
+      const result = await query(
+        'UPDATE bookings SET partner_paid = $1 WHERE id = $2 RETURNING id, paid, partner_paid',
+        [paid, id],
+      );
+      updated = result.rows[0];
+    } else {
+      const result = await query(
+        'UPDATE bookings SET paid = $1 WHERE id = $2 RETURNING id, paid, partner_paid',
+        [paid, id],
+      );
+      updated = result.rows[0];
+    }
+    const viewerPaid =
+      isPaymentPartner && !isOwnerStudent ? updated.partner_paid === true : updated.paid === true;
+    res.json({ booking: { id: updated.id, paid: viewerPaid } });
   }),
 );
 

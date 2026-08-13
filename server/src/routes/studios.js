@@ -101,10 +101,12 @@ studiosRouter.get(
           AND NOT EXISTS (
             SELECT 1 FROM recurring_assignments ra
              WHERE ra.slot_id = s.id AND ra.status = 'approved'
+               AND ra.starts_on <= $4::date
           )
           AND NOT EXISTS (
             SELECT 1 FROM recurring_assignments ra
              WHERE ra.slot_id = s.id AND ra.status = 'pending'
+               AND ra.starts_on <= $4::date
           )
           AND NOT EXISTS (
             SELECT 1 FROM bookings b

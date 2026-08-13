@@ -6,9 +6,18 @@ import { useToast } from '../components/Toast.jsx';
 import PaidToggle from '../components/PaidToggle.jsx';
 import Modal, { ModalOption } from '../components/Modal.jsx';
 import AddToCalendar from '../components/AddToCalendar.jsx';
-import { WEEKDAYS, fmtTimeRange, fmtDate, upcomingWeekdayDates } from '../lib/format.js';
+import { WEEKDAYS, fmtTimeRange, fmtDate, upcomingWeekdayDates, todayISO } from '../lib/format.js';
 
 const UPCOMING_WEEKS = 6;
+
+function lessonContact(item) {
+  const bits = [item.teacher.name];
+  if (item.childName) bits.push(`For ${item.childName}`);
+  if (item.isPartner && item.partnerName) {
+    bits.push(item.childName ? item.partnerName : `Booked by ${item.partnerName}`);
+  }
+  return bits.join(' · ');
+}
 
 export default function MyLessons() {
   const toast = useToast();
@@ -88,7 +97,9 @@ export default function MyLessons() {
                   (r.exceptions || []).find((e) => e.date === date)?.kind || null;
                 const paidFor = (date) =>
                   (r.payments || []).find((p) => p.date === date)?.paid === true;
-                const occurrences = upcomingWeekdayDates(r.weekday, UPCOMING_WEEKS);
+                const from =
+                  r.startsOn && r.startsOn > todayISO() ? r.startsOn : todayISO();
+                const occurrences = upcomingWeekdayDates(r.weekday, UPCOMING_WEEKS, from);
                 return (
                   <div className="weekly-spot" key={`r-${r.id}`}>
                     <div className="list-row">
@@ -98,19 +109,30 @@ export default function MyLessons() {
                       </div>
                       <div className="grow">
                         {r.teacher.name}
-                        {r.childName && (
-                          <div className="contact">For {r.childName}</div>
+                        {(r.childName || (r.isPartner && r.partnerName)) && (
+                          <div className="contact">
+                            {r.childName ? `For ${r.childName}` : ''}
+                            {r.childName && r.isPartner && r.partnerName ? ' · ' : ''}
+                            {r.isPartner && r.partnerName
+                              ? r.childName
+                                ? r.partnerName
+                                : `Booked by ${r.partnerName}`
+                              : ''}
+                          </div>
                         )}
                       </div>
                       <div className="row" style={{ gap: '0.4rem' }}>
+                        {r.isPartner && <span className="pill pill-partner">Partner</span>}
                         <span className="pill pill-taken">Weekly</span>
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => setLeaveTarget(r)}
-                        >
-                          Leave
-                        </button>
+                        {r.canManage !== false && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => setLeaveTarget(r)}
+                          >
+                            Leave
+                          </button>
+                        )}
                       </div>
                     </div>
                     <div className="weekly-occurrences">
@@ -128,7 +150,7 @@ export default function MyLessons() {
                               <span className="pill pill-warn">Cancelled</span>
                             ) : (
                               <div className="row" style={{ gap: '0.4rem' }}>
-                                {r.trackPayments && (
+                                {r.trackPayments && r.canMarkPaid !== false && (
                                   <PaidToggle
                                     paid={paidFor(date)}
                                     disabled={recurringPaidMutation.isPending}
@@ -153,14 +175,16 @@ export default function MyLessons() {
                                 >
                                   Calendar
                                 </button>
-                                <button
-                                  type="button"
-                                  className="btn btn-ghost btn-sm"
-                                  onClick={() => skipWeek.mutate({ id: r.id, date })}
-                                  disabled={skipWeek.isPending}
-                                >
-                                  Cancel
-                                </button>
+                                {r.canManage !== false && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-sm"
+                                    onClick={() => skipWeek.mutate({ id: r.id, date })}
+                                    disabled={skipWeek.isPending}
+                                  >
+                                    Cancel
+                                  </button>
+                                )}
                               </div>
                             )}
                           </div>
@@ -188,13 +212,11 @@ export default function MyLessons() {
                   </div>
                   <div className="grow">
                     {fmtTimeRange(b.startTime, b.durationMin)}
-                    <div className="contact">
-                      {b.teacher.name}
-                      {b.childName ? ` · For ${b.childName}` : ''}
-                    </div>
+                    <div className="contact">{lessonContact(b)}</div>
                   </div>
                   <div className="row" style={{ gap: '0.4rem' }}>
-                    {b.trackPayments && (
+                    {b.isPartner && <span className="pill pill-partner">Partner</span>}
+                    {b.trackPayments && b.canMarkPaid !== false && (
                       <PaidToggle
                         paid={b.paid}
                         disabled={paidMutation.isPending}
@@ -217,14 +239,16 @@ export default function MyLessons() {
                     >
                       Calendar
                     </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => cancel(b.id)}
-                      disabled={cancelMutation.isPending}
-                    >
-                      Cancel
-                    </button>
+                    {b.canManage !== false && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => cancel(b.id)}
+                        disabled={cancelMutation.isPending}
+                      >
+                        Cancel
+                      </button>
+                    )}
                   </div>
                 </div>
               ))
@@ -242,18 +266,18 @@ export default function MyLessons() {
                   </div>
                   <div className="grow">
                     {fmtTimeRange(b.startTime, b.durationMin)}
-                    <div className="contact">
-                      {b.teacher.name}
-                      {b.childName ? ` · For ${b.childName}` : ''}
-                    </div>
+                    <div className="contact">{lessonContact(b)}</div>
                   </div>
-                  {b.trackPayments && (
-                    <PaidToggle
-                      paid={b.paid}
-                      disabled={paidMutation.isPending}
-                      onChange={(paid) => paidMutation.mutate({ id: b.id, paid })}
-                    />
-                  )}
+                  <div className="row" style={{ gap: '0.4rem' }}>
+                    {b.isPartner && <span className="pill pill-partner">Partner</span>}
+                    {b.trackPayments && b.canMarkPaid !== false && (
+                      <PaidToggle
+                        paid={b.paid}
+                        disabled={paidMutation.isPending}
+                        onChange={(paid) => paidMutation.mutate({ id: b.id, paid })}
+                      />
+                    )}
+                  </div>
                 </div>
               ))}
             </div>

@@ -13,6 +13,7 @@ import {
 import { getTeacherStudios, teacherListedAtStudio } from '../utils/teacherStudios.js';
 import { sanitizeRichText } from '../utils/sanitizeHtml.js';
 import { ensureLinkedStudentForTeacher, tryResolveBookerStudentId } from '../utils/booker.js';
+import { partnerIdsFor } from '../utils/partners.js';
 
 export const teachersRouter = Router();
 
@@ -175,18 +176,21 @@ teachersRouter.get(
     }
 
     const { rows: bookings } = await query(
-      `SELECT b.id, b.lesson_date, b.created_at, b.status, b.paid, b.slot_id, b.child_name,
+      `SELECT b.id, b.lesson_date, b.created_at, b.status, b.paid, b.partner_paid, b.slot_id, b.child_name,
+              b.payment_partner_id, pp.full_name AS payment_partner_name,
               s.weekday, s.start_time, s.duration_min, s.price_cents,
               st.full_name AS student_name, st.email AS student_email, st.phone AS student_phone
          FROM bookings b
          JOIN slots s ON s.id = b.slot_id
          JOIN students st ON st.id = b.student_id
+         LEFT JOIN students pp ON pp.id = b.payment_partner_id
         WHERE s.teacher_id = $1 AND b.status = 'booked' ${weekFilter}
           AND NOT EXISTS (
             SELECT 1 FROM recurring_assignments ra
              WHERE ra.slot_id = b.slot_id
                AND ra.student_id = b.student_id
                AND ra.status IN ('pending', 'approved')
+               AND ra.starts_on <= b.lesson_date
           )
         ORDER BY b.lesson_date, s.start_time`,
       bookingsParams,
@@ -211,11 +215,13 @@ teachersRouter.get(
     }
 
     const { rows: recurring } = await query(
-      `SELECT ra.id, ra.child_name, s.id AS slot_id, s.weekday, s.start_time, s.duration_min,
+      `SELECT ra.id, ra.child_name, ra.payment_partner_id, ra.starts_on, pp.full_name AS payment_partner_name,
+              s.id AS slot_id, s.weekday, s.start_time, s.duration_min,
               st.full_name AS student_name, st.email AS student_email, st.phone AS student_phone
          FROM recurring_assignments ra
          JOIN slots s ON s.id = ra.slot_id
          JOIN students st ON st.id = ra.student_id
+         LEFT JOIN students pp ON pp.id = ra.payment_partner_id
         WHERE s.teacher_id = $1 AND ra.status = 'approved'
         ORDER BY s.weekday, s.start_time`,
       [req.user.id],
@@ -225,17 +231,17 @@ teachersRouter.get(
     if (weekRange && recurring.length) {
       const recurringIds = recurring.map((r) => r.id);
       const { rows: payRows } = await query(
-        `SELECT recurring_assignment_id, lesson_date, paid
+        `SELECT recurring_assignment_id, lesson_date, paid, partner_paid
            FROM recurring_lesson_payments
           WHERE recurring_assignment_id = ANY($1::int[])
             AND lesson_date BETWEEN $2 AND $3`,
         [recurringIds, weekRange.monday, weekRange.sunday],
       );
       for (const p of payRows) {
-        recurringPayments.set(
-          `${p.recurring_assignment_id}:${fmtDate(p.lesson_date)}`,
-          p.paid === true,
-        );
+        recurringPayments.set(`${p.recurring_assignment_id}:${fmtDate(p.lesson_date)}`, {
+          paid: p.paid === true,
+          partnerPaid: p.partner_paid === true,
+        });
       }
     }
 
@@ -258,6 +264,8 @@ teachersRouter.get(
         durationMin: b.duration_min,
         priceCents: b.price_cents,
         paid: b.paid === true,
+        partnerPaid: b.partner_paid === true,
+        paymentPartner: b.payment_partner_name ? { name: b.payment_partner_name } : null,
         student: {
           name: b.student_name,
           email: b.student_email,
@@ -265,25 +273,30 @@ teachersRouter.get(
           childName: b.child_name || null,
         },
       })),
-      recurring: recurring.map((r) => {
+      recurring: recurring.flatMap((r) => {
         const lessonDate = weekRange ? dateForWeekday(weekRange.monday, r.weekday) : null;
-        return {
+        const startsOn = r.starts_on ? fmtDate(r.starts_on) : null;
+        if (lessonDate && startsOn && lessonDate < startsOn) return [];
+        const pay = lessonDate
+          ? recurringPayments.get(`${r.id}:${lessonDate}`)
+          : null;
+        return [{
           id: r.id,
           slotId: r.slot_id,
           weekday: r.weekday,
           startTime: fmtTime(r.start_time),
           durationMin: r.duration_min,
           lessonDate,
-          paid: lessonDate
-            ? recurringPayments.get(`${r.id}:${lessonDate}`) === true
-            : false,
+          paid: pay?.paid === true,
+          partnerPaid: pay?.partnerPaid === true,
+          paymentPartner: r.payment_partner_name ? { name: r.payment_partner_name } : null,
           student: {
             name: r.student_name,
             email: r.student_email,
             phone: r.student_phone,
             childName: r.child_name || null,
           },
-        };
+        }];
       }),
     });
   }),
@@ -393,23 +406,26 @@ teachersRouter.get(
     let pending = [];
     let myPending = [];
     let exceptions = [];
+    const meId = await tryResolveBookerStudentId(req.user);
+    const partnerIdSet = new Set(meId ? await partnerIdsFor(meId) : []);
     if (slotIds.length) {
       const [approvedRes, bookedRes, pendingRes, exceptionsRes] = await Promise.all([
         query(
-          `SELECT ra.slot_id, ra.student_id, st.full_name
+          `SELECT ra.slot_id, ra.student_id, ra.child_name, ra.starts_on, st.full_name
              FROM recurring_assignments ra JOIN students st ON st.id = ra.student_id
             WHERE ra.status = 'approved' AND ra.slot_id = ANY($1::int[])`,
           [slotIds],
         ),
         query(
-          `SELECT b.slot_id, b.lesson_date, b.student_id
+          `SELECT b.slot_id, b.lesson_date, b.student_id, b.child_name, st.full_name
              FROM bookings b
+             JOIN students st ON st.id = b.student_id
             WHERE b.status = 'booked' AND b.slot_id = ANY($1::int[])
               AND b.lesson_date BETWEEN $2 AND $3`,
           [slotIds, monday, sunday],
         ),
         query(
-          `SELECT ra.slot_id, ra.student_id, st.full_name
+          `SELECT ra.slot_id, ra.student_id, ra.child_name, ra.starts_on, st.full_name
              FROM recurring_assignments ra JOIN students st ON st.id = ra.student_id
             WHERE ra.status = 'pending' AND ra.slot_id = ANY($1::int[])`,
           [slotIds],
@@ -424,12 +440,11 @@ teachersRouter.get(
       booked = bookedRes.rows;
       pending = pendingRes.rows;
       exceptions = exceptionsRes.rows;
-      const bookerId = await tryResolveBookerStudentId(req.user);
-      if (bookerId) {
+      if (meId) {
         const { rows } = await query(
-          `SELECT slot_id FROM recurring_assignments
+          `SELECT slot_id, starts_on FROM recurring_assignments
             WHERE status = 'pending' AND student_id = $1 AND slot_id = ANY($2::int[])`,
-          [bookerId, slotIds],
+          [meId, slotIds],
         );
         myPending = rows;
       }
@@ -438,22 +453,38 @@ teachersRouter.get(
     const approvedBySlot = new Map(approved.map((r) => [r.slot_id, r]));
     const bookedBySlot = new Map(booked.map((r) => [r.slot_id, r]));
     const pendingBySlot = new Map(pending.map((r) => [r.slot_id, r]));
-    const pendingSet = new Set(myPending.map((r) => r.slot_id));
     // Exceptions are date-specific; key by slot since the grid shows one date
     // (the slot's weekday) per week.
-    const exceptionBySlot = new Map(
-      exceptions.map((e) => [e.slot_id, e.kind]),
-    );
-    const meId = await tryResolveBookerStudentId(req.user);
+    const exceptionBySlot = new Map(exceptions.map((e) => [e.slot_id, e.kind]));
+
+    const partnerLabel = (row) => {
+      if (!row || !meId || row.student_id === meId) return null;
+      if (!partnerIdSet.has(row.student_id)) return null;
+      return {
+        name: row.full_name,
+        childName: row.child_name || null,
+      };
+    };
+
+    const assignmentCovers = (row, lessonDate) => {
+      if (!row) return false;
+      if (!row.starts_on) return true;
+      return fmtDate(row.starts_on) <= lessonDate;
+    };
 
     const result = slots.map((s) => {
       const lessonDate = dateForWeekday(monday, s.weekday);
       const exceptionKind = exceptionBySlot.get(s.id);
-      const rec = approvedBySlot.get(s.id);
+      const rec = assignmentCovers(approvedBySlot.get(s.id), lessonDate)
+        ? approvedBySlot.get(s.id)
+        : null;
       const bk = bookedBySlot.get(s.id);
-      const pend = pendingBySlot.get(s.id);
+      const pend = assignmentCovers(pendingBySlot.get(s.id), lessonDate)
+        ? pendingBySlot.get(s.id)
+        : null;
       let status = 'open';
       let mine = false;
+      let bookedByPartner = null;
       if (exceptionKind === 'blocked') {
         // Teacher made this week unavailable; nobody can book.
         status = 'unavailable';
@@ -463,16 +494,20 @@ teachersRouter.get(
         if (bk) {
           status = 'booked';
           mine = meId != null && bk.student_id === meId;
+          bookedByPartner = partnerLabel(bk);
         }
       } else if (rec) {
         status = 'recurring';
         mine = meId != null && rec.student_id === meId;
+        bookedByPartner = partnerLabel(rec);
       } else if (bk) {
         status = 'booked';
         mine = meId != null && bk.student_id === meId;
+        bookedByPartner = partnerLabel(bk);
       } else if (pend) {
         status = 'pending';
         mine = meId != null && pend.student_id === meId;
+        bookedByPartner = partnerLabel(pend);
       }
       return {
         id: s.id,
@@ -483,8 +518,11 @@ teachersRouter.get(
         lessonDate,
         status,
         mine,
+        bookedByPartner,
         oneOff: s.one_off_date != null,
-        recurringPendingMine: pendingSet.has(s.id),
+        recurringPendingMine: myPending.some(
+          (p) => p.slot_id === s.id && assignmentCovers(p, lessonDate),
+        ),
       };
     });
 

@@ -8,6 +8,9 @@
   --green: #2d6a4f;
   --green-dark: #235a42;
   --green-light: #e8f3ed;
+  --partner: #2a4a7a;
+  --partner-dark: #1e3a62;
+  --partner-light: #e6eef8;
   --border: #d4cfc4;
   --muted: #8a8578;
   --white: #ffffff;
@@ -368,6 +371,10 @@ a:hover {
   background: #fdeede;
   color: #a05a00;
 }
+.pill-partner {
+  background: var(--accent-light);
+  color: var(--accent-dark);
+}
 
 /* Parent profile children list */
 .parent-children {
@@ -379,6 +386,42 @@ a:hover {
   font-size: 13px;
   font-weight: 600;
   margin-bottom: 0.25rem;
+}
+
+.partner-code-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.partner-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 1.05rem;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  padding: 8px 12px;
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  flex: 1;
+  min-width: 8rem;
+}
+.partner-add {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+}
+.partner-add .btn {
+  height: 42px;
+}
+.partner-paid-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.35;
+  white-space: nowrap;
 }
 
 /* Modal */
@@ -439,6 +482,18 @@ a:hover {
 .modal-option.danger .modal-option-label {
   color: var(--danger);
 }
+.whats-new-body {
+  font-size: 14px;
+  line-height: 1.45;
+  margin: 0 0 1rem;
+}
+.whats-new-body p {
+  margin: 0 0 0.75rem;
+}
+.whats-new-body p:last-child {
+  margin-bottom: 0;
+}
+
 .modal-option-desc {
   font-size: 12px;
   color: var(--muted);
@@ -589,6 +644,14 @@ a:hover {
   border-style: dashed;
   border-color: var(--border);
 }
+.slot-card.past.mine,
+.slot-card.past.partner,
+.slot-card.past.pending {
+  border-color: var(--border);
+  background: var(--cream);
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .slot-card.past .slot-time,
 .slot-card.past .slot-meta {
   color: var(--muted);
@@ -607,6 +670,17 @@ a:hover {
   background: var(--green-light);
   opacity: 1;
   cursor: default;
+}
+.slot-card.partner {
+  border-color: var(--partner);
+  background: var(--partner-light);
+  opacity: 1;
+  cursor: default;
+}
+.slot-card.pending.partner {
+  border-color: #f0c090;
+  background: #fef3e2;
+  opacity: 1;
 }
 .slot-dot {
   width: 12px;

@@ -23,10 +23,11 @@ const DISPLAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 const SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 /** Child name on the lesson when present; parent contact underneath. */
-function StudentLessonInfo({ student }) {
+function StudentLessonInfo({ student, paymentPartner }) {
   const lessonName = student.childName || student.name;
   const contactParts = [];
   if (student.childName) contactParts.push(`Parent: ${student.name}`);
+  if (paymentPartner?.name) contactParts.push(`Partner: ${paymentPartner.name}`);
   if (student.email) contactParts.push(student.email);
   if (student.phone) contactParts.push(student.phone);
   return (
@@ -35,6 +36,24 @@ function StudentLessonInfo({ student }) {
       {contactParts.length > 0 && (
         <div className="contact">{contactParts.join(' · ')}</div>
       )}
+    </div>
+  );
+}
+
+function firstName(full) {
+  const trimmed = String(full || '').trim();
+  return trimmed.split(/\s+/)[0] || trimmed;
+}
+
+function PartnershipPaidStatus({ bookerName, partnerName, paid, partnerPaid }) {
+  return (
+    <div className="partner-paid-status">
+      <span>
+        {firstName(bookerName)}: {paid ? 'Paid' : 'Unpaid'}
+      </span>
+      <span>
+        {firstName(partnerName)}: {partnerPaid ? 'Paid' : 'Unpaid'}
+      </span>
     </div>
   );
 }
@@ -260,7 +279,7 @@ export default function TeacherDashboard() {
                   )}
                 </div>
               </div>
-              <StudentLessonInfo student={p.student} />
+              <StudentLessonInfo student={p.student} paymentPartner={p.paymentPartner} />
               <div className="row" style={{ gap: '0.4rem' }}>
                 <button
                   type="button"
@@ -549,17 +568,29 @@ function BookingsList({
               <div className="d">Every {WEEKDAYS[r.weekday]}</div>
               <div>{fmtTimeRange(r.startTime, r.durationMin)}</div>
             </div>
-            <StudentLessonInfo student={r.student} />
+            <StudentLessonInfo student={r.student} paymentPartner={r.paymentPartner} />
             {exception === 'blocked' ? (
               <span className="pill pill-warn">Unavailable this week</span>
             ) : exception === 'skipped' ? (
               <span className="pill pill-warn">Cancelled this week</span>
             ) : (
-              <div className="row" style={{ gap: '0.4rem' }}>
+              <div className="row" style={{ gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                 <span className="pill pill-taken">Weekly</span>
+                {trackPayments && r.paymentPartner && (
+                  <PartnershipPaidStatus
+                    bookerName={r.student.name}
+                    partnerName={r.paymentPartner.name}
+                    paid={r.paid === true}
+                    partnerPaid={r.partnerPaid === true}
+                  />
+                )}
                 {trackPayments && (
                   <PaidToggle
-                    paid={r.paid === true}
+                    paid={
+                      r.paymentPartner
+                        ? r.paid === true && r.partnerPaid === true
+                        : r.paid === true
+                    }
                     disabled={paidPending}
                     onChange={(paid) =>
                       onRecurringPaidChange({
@@ -588,11 +619,21 @@ function BookingsList({
             <div className="d">{fmtDate(b.lessonDate, { weekday: 'short', month: 'short', day: 'numeric' })}</div>
             <div>{fmtTimeRange(b.startTime, b.durationMin)}</div>
           </div>
-          <StudentLessonInfo student={b.student} />
-          <div className="row" style={{ gap: '0.4rem' }}>
+          <StudentLessonInfo student={b.student} paymentPartner={b.paymentPartner} />
+          <div className="row" style={{ gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            {trackPayments && b.paymentPartner && (
+              <PartnershipPaidStatus
+                bookerName={b.student.name}
+                partnerName={b.paymentPartner.name}
+                paid={b.paid === true}
+                partnerPaid={b.partnerPaid === true}
+              />
+            )}
             {trackPayments && (
               <PaidToggle
-                paid={b.paid}
+                paid={
+                  b.paymentPartner ? b.paid === true && b.partnerPaid === true : b.paid
+                }
                 disabled={paidPending}
                 onChange={(paid) => onPaidChange(b.id, paid)}
               />

@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { pool, query } from './db.js';
 import { todayISO, getMonday, dateForWeekday, addWeeks, addDays, weekdayOf } from './utils/week.js';
+import { allocatePartnerCode, orderedPair } from './utils/partners.js';
 
 /**
  * Demo data for local testing. Safe to re-run.
@@ -70,11 +71,12 @@ async function upsertStudent({
   isParent = false,
   childrenNames = [],
 }) {
+  const partnerCode = await allocatePartnerCode();
   const { rows } = await query(
     `INSERT INTO students (
-       email, password_hash, full_name, phone, is_parent, children_names
+       email, password_hash, full_name, phone, is_parent, children_names, partner_code
      )
-     VALUES ($1, $2, $3, $4, $5, $6)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT (email) DO UPDATE SET
        password_hash = EXCLUDED.password_hash,
        full_name = EXCLUDED.full_name,
@@ -82,7 +84,7 @@ async function upsertStudent({
        is_parent = EXCLUDED.is_parent,
        children_names = EXCLUDED.children_names
      RETURNING id`,
-    [email, passwordHash, fullName, phone, isParent, childrenNames],
+    [email, passwordHash, fullName, phone, isParent, childrenNames, partnerCode],
   );
   return rows[0].id;
 }
@@ -168,32 +170,54 @@ async function ensureOneOffSlot({
   return rows[0].id;
 }
 
-async function ensureBooking({ slotId, studentId, lessonDate, childName = null }) {
+async function ensureBooking({ slotId, studentId, lessonDate, childName = null, paymentPartnerId = null }) {
   const { rows: existing } = await query(
     `SELECT id FROM bookings
       WHERE slot_id = $1 AND lesson_date = $2 AND status = 'booked'
       LIMIT 1`,
     [slotId, lessonDate],
   );
-  if (existing[0]) return existing[0].id;
+  if (existing[0]) {
+    if (paymentPartnerId) {
+      await query('UPDATE bookings SET payment_partner_id = $1 WHERE id = $2', [
+        paymentPartnerId,
+        existing[0].id,
+      ]);
+    }
+    return existing[0].id;
+  }
 
   const { rows } = await query(
-    `INSERT INTO bookings (slot_id, student_id, lesson_date, child_name)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO bookings (slot_id, student_id, lesson_date, child_name, payment_partner_id)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING id`,
-    [slotId, studentId, lessonDate, childName],
+    [slotId, studentId, lessonDate, childName, paymentPartnerId],
   );
   return rows[0].id;
 }
 
-async function ensureRecurring({ slotId, studentId, status = 'pending', childName = null }) {
+async function ensureRecurring({
+  slotId,
+  studentId,
+  status = 'pending',
+  childName = null,
+  startsOn,
+}) {
   const { rows: existing } = await query(
     `SELECT id FROM recurring_assignments
       WHERE slot_id = $1 AND student_id = $2 AND status = $3
       LIMIT 1`,
     [slotId, studentId, status],
   );
-  if (existing[0]) return existing[0].id;
+  if (existing[0]) {
+    if (startsOn) {
+      await query('UPDATE recurring_assignments SET starts_on = $1 WHERE id = $2', [
+        startsOn,
+        existing[0].id,
+      ]);
+    }
+    return existing[0].id;
+  }
 
   // Clear conflicting pending/approved for this slot if we're seeding a specific state.
   if (status === 'approved' || status === 'pending') {
@@ -206,10 +230,10 @@ async function ensureRecurring({ slotId, studentId, status = 'pending', childNam
   }
 
   const { rows } = await query(
-    `INSERT INTO recurring_assignments (slot_id, student_id, status, child_name, decided_at)
-     VALUES ($1, $2, $3, $4, CASE WHEN $3 = 'pending' THEN NULL ELSE now() END)
+    `INSERT INTO recurring_assignments (slot_id, student_id, status, child_name, decided_at, starts_on)
+     VALUES ($1, $2, $3, $4, CASE WHEN $3 = 'pending' THEN NULL ELSE now() END, $5)
      RETURNING id`,
-    [slotId, studentId, status, childName],
+    [slotId, studentId, status, childName, startsOn || todayISO()],
   );
   return rows[0].id;
 }
@@ -286,6 +310,14 @@ async function seed() {
     phone: '555-0188',
   });
 
+  const [a, b] = orderedPair(janeId, parentId);
+  await query(
+    `INSERT INTO student_partners (student_a_id, student_b_id)
+     VALUES ($1, $2)
+     ON CONFLICT (student_a_id, student_b_id) DO NOTHING`,
+    [a, b],
+  );
+
   // Allen: forever weekly template slots
   const foreverSlots = [
     [1, '16:00'],
@@ -352,10 +384,13 @@ async function seed() {
 
   // Jane holds Friday 3pm as an approved weekly spot
   if (fri1500) {
+    let friLesson = dateForWeekday(thisMonday, 5);
+    if (friLesson < today) friLesson = dateForWeekday(nextMonday, 5);
     await ensureRecurring({
       slotId: fri1500,
       studentId: janeId,
       status: 'approved',
+      startsOn: friLesson,
     });
   }
 
@@ -367,19 +402,21 @@ async function seed() {
       studentId: parentId,
       lessonDate: nextMonLesson,
       childName: 'Alina Metler',
+      paymentPartnerId: janeId,
     });
   }
 
   // Alex has a pending weekly request on Wednesday 4pm
   if (wed1600) {
+    let wedLesson = dateForWeekday(thisMonday, 3);
+    if (wedLesson < today) wedLesson = dateForWeekday(nextMonday, 3);
     await ensureRecurring({
       slotId: wed1600,
       studentId: alexId,
       status: 'pending',
+      startsOn: wedLesson,
     });
     // Also book Alex's first lesson this/next Wed if still open
-    let wedLesson = dateForWeekday(thisMonday, 3);
-    if (wedLesson < today) wedLesson = dateForWeekday(nextMonday, 3);
     await ensureBooking({
       slotId: wed1600,
       studentId: alexId,
@@ -416,7 +453,7 @@ async function seed() {
   console.log('  • hidden@example.com  Hidden         inactive listing');
   console.log('\nStudents (password: password123)');
   console.log('  • student@example.com  Jane Student   regular student + weekly Fri 3pm');
-  console.log('  • parent@example.com   Sam Metler     parent (Alina, Ian)');
+  console.log('  • parent@example.com   Sam Metler     parent (Alina, Ian); partnered with Jane');
   console.log('  • alex@example.com     Alex Rivera    pending weekly Wed 4pm');
   console.log('\nAlso seeded: forever slots, a 6-week Wed 6pm series, a one-time Thu slot,');
   console.log('parent child bookings, and a pending weekly request for the teacher dashboard.');

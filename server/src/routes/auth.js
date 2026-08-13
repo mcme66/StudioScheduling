@@ -12,6 +12,7 @@ import {
   clearAuthCookie,
   requireAuth,
 } from '../middleware/auth.js';
+import { allocatePartnerCode } from '../utils/partners.js';
 
 export const authRouter = Router();
 
@@ -110,11 +111,12 @@ authRouter.post(
         [row.id, studioId],
       );
     } else {
+      const partnerCode = await allocatePartnerCode();
       const result = await query(
-        `INSERT INTO students (email, password_hash, full_name, phone)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO students (email, password_hash, full_name, phone, partner_code)
+         VALUES ($1, $2, $3, $4, $5)
          RETURNING *`,
-        [data.email, passwordHash, data.fullName, data.phone || null],
+        [data.email, passwordHash, data.fullName, data.phone || null, partnerCode],
       ).catch(rethrowDuplicate);
       row = result.rows[0];
     }

@@ -4,17 +4,21 @@ import { query, withTransaction } from '../db.js';
 import { asyncHandler, HttpError } from '../middleware/error.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { sendRecurringApproved } from '../services/email.js';
-import { weekdayOf, isValidDateStr, todayISO } from '../utils/week.js';
+import { weekdayOf, isValidDateStr, todayISO, isDateInSeries } from '../utils/week.js';
 import { normalizeChildrenNames } from './students.js';
 import { resolveBookerStudentId } from '../utils/booker.js';
+import { resolvePaymentPartnerId } from '../utils/partners.js';
 
 export const recurringRouter = Router();
 
 const fmtTime = (t) => (typeof t === 'string' ? t.slice(0, 5) : t);
+const fmtDate = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : d);
 
 const requestSchema = z.object({
   slotId: z.number().int().positive(),
+  lessonDate: z.string().refine(isValidDateStr, 'lessonDate must be YYYY-MM-DD.'),
   childName: z.string().max(120).optional().nullable(),
+  paymentPartnerId: z.number().int().positive().optional().nullable(),
 });
 
 const skipSchema = z.object({
@@ -32,10 +36,17 @@ recurringRouter.post(
   requireAuth,
   asyncHandler(async (req, res) => {
     const bookerStudentId = await resolveBookerStudentId(req.user);
-    const { slotId, childName: requestedChildName } = requestSchema.parse(req.body);
+    const {
+      slotId,
+      lessonDate,
+      childName: requestedChildName,
+      paymentPartnerId: requestedPartnerId,
+    } = requestSchema.parse(req.body);
 
     const { rows: slotRows } = await query(
-      'SELECT id, active, one_off_date, teacher_id FROM slots WHERE id = $1',
+      `SELECT id, active, one_off_date, teacher_id, weekday, start_time,
+              series_start_date, series_end_date
+         FROM slots WHERE id = $1`,
       [slotId],
     );
     if (!slotRows[0] || !slotRows[0].active) {
@@ -49,6 +60,21 @@ recurringRouter.post(
         400,
         'Weekly time slots cannot be requested for this lesson slot because this is a temporary slot.',
       );
+    }
+    if (weekdayOf(lessonDate) !== slotRows[0].weekday) {
+      throw new HttpError(400, 'That date does not match the lesson day.');
+    }
+    if (lessonDate < todayISO()) {
+      throw new HttpError(400, 'Weekly spots cannot start in the past.');
+    }
+    if (
+      !isDateInSeries(
+        lessonDate,
+        slotRows[0].series_start_date ? fmtDate(slotRows[0].series_start_date) : null,
+        slotRows[0].series_end_date ? fmtDate(slotRows[0].series_end_date) : null,
+      )
+    ) {
+      throw new HttpError(404, 'That lesson time is not available.');
     }
 
     const { rows: studentRows } = await query(
@@ -99,14 +125,24 @@ recurringRouter.post(
       throw new HttpError(409, 'This time already has a pending weekly spot request.');
     }
 
+    const paymentPartnerId = await resolvePaymentPartnerId(bookerStudentId, requestedPartnerId);
+
     const { rows } = await query(
-      `INSERT INTO recurring_assignments (slot_id, student_id, status, child_name)
-       VALUES ($1, $2, 'pending', $3) RETURNING *`,
-      [slotId, bookerStudentId, childName],
+      `INSERT INTO recurring_assignments
+         (slot_id, student_id, status, child_name, payment_partner_id, starts_on)
+       VALUES ($1, $2, 'pending', $3, $4, $5) RETURNING *`,
+      [slotId, bookerStudentId, childName, paymentPartnerId, lessonDate],
     );
 
     res.status(201).json({
-      request: { id: rows[0].id, slotId, status: 'pending', childName },
+      request: {
+        id: rows[0].id,
+        slotId,
+        status: 'pending',
+        childName,
+        paymentPartnerId,
+        startsOn: lessonDate,
+      },
     });
   }),
 );
@@ -117,16 +153,14 @@ recurringRouter.get(
   requireRole('teacher'),
   asyncHandler(async (req, res) => {
     const { rows } = await query(
-      `SELECT ra.id, ra.requested_at, ra.child_name, s.id AS slot_id, s.weekday, s.start_time, s.duration_min,
+      `SELECT ra.id, ra.requested_at, ra.child_name, ra.payment_partner_id, ra.starts_on,
+              s.id AS slot_id, s.weekday, s.start_time, s.duration_min,
               st.full_name AS student_name, st.email AS student_email, st.phone AS student_phone,
-              (
-                SELECT b.lesson_date FROM bookings b
-                 WHERE b.slot_id = ra.slot_id AND b.student_id = ra.student_id AND b.status = 'booked'
-                 ORDER BY b.lesson_date LIMIT 1
-              ) AS first_lesson_date
+              pp.full_name AS payment_partner_name
          FROM recurring_assignments ra
          JOIN slots s ON s.id = ra.slot_id
          JOIN students st ON st.id = ra.student_id
+         LEFT JOIN students pp ON pp.id = ra.payment_partner_id
         WHERE s.teacher_id = $1 AND ra.status = 'pending'
         ORDER BY ra.requested_at`,
       [req.user.id],
@@ -139,17 +173,14 @@ recurringRouter.get(
         startTime: fmtTime(r.start_time),
         durationMin: r.duration_min,
         requestedAt: r.requested_at,
-        firstLessonDate: r.first_lesson_date
-          ? r.first_lesson_date instanceof Date
-            ? r.first_lesson_date.toISOString().slice(0, 10)
-            : String(r.first_lesson_date).slice(0, 10)
-          : null,
+        firstLessonDate: r.starts_on ? fmtDate(r.starts_on) : null,
         student: {
           name: r.student_name,
           email: r.student_email,
           phone: r.student_phone,
           childName: r.child_name || null,
         },
+        paymentPartner: r.payment_partner_name ? { name: r.payment_partner_name } : null,
       })),
     });
   }),
@@ -246,7 +277,7 @@ recurringRouter.patch(
     const { date, paid } = paidSchema.parse(req.body);
 
     const { rows } = await query(
-      `SELECT ra.id, ra.status, ra.student_id, ra.slot_id, s.teacher_id, s.weekday,
+      `SELECT ra.id, ra.status, ra.student_id, ra.payment_partner_id, ra.slot_id, s.teacher_id, s.weekday,
               t.track_payments
          FROM recurring_assignments ra
          JOIN slots s ON s.id = ra.slot_id
@@ -263,7 +294,9 @@ recurringRouter.patch(
     const bookerStudentId = await resolveBookerStudentId(req.user).catch(() => null);
     const isTeacher = req.user.role === 'teacher' && ra.teacher_id === req.user.id;
     const isStudent = bookerStudentId != null && ra.student_id === bookerStudentId;
-    if (!isTeacher && !isStudent) {
+    const isPaymentPartner =
+      bookerStudentId != null && ra.payment_partner_id === bookerStudentId;
+    if (!isTeacher && !isStudent && !isPaymentPartner) {
       throw new HttpError(403, 'You cannot update payment for this weekly spot.');
     }
     if (ra.status !== 'approved') {
@@ -273,21 +306,33 @@ recurringRouter.patch(
       throw new HttpError(400, 'That date does not match the lesson day.');
     }
 
+    const bookerPaid = isTeacher || isStudent ? paid : null;
+    const partnerPaid = isTeacher || (isPaymentPartner && !isStudent) ? paid : null;
     const { rows: updated } = await query(
-      `INSERT INTO recurring_lesson_payments (recurring_assignment_id, lesson_date, paid)
-       VALUES ($1, $2, $3)
+      `INSERT INTO recurring_lesson_payments (recurring_assignment_id, lesson_date, paid, partner_paid)
+       VALUES (
+         $1, $2,
+         COALESCE($3, false),
+         COALESCE($4, false)
+       )
        ON CONFLICT (recurring_assignment_id, lesson_date)
-       DO UPDATE SET paid = EXCLUDED.paid
-       RETURNING recurring_assignment_id, lesson_date, paid`,
-      [id, date, paid],
+       DO UPDATE SET
+         paid = COALESCE($3, recurring_lesson_payments.paid),
+         partner_paid = COALESCE($4, recurring_lesson_payments.partner_paid)
+       RETURNING recurring_assignment_id, lesson_date, paid, partner_paid`,
+      [id, date, bookerPaid, partnerPaid],
     );
+    const viewerPaid =
+      isPaymentPartner && !isStudent && !isTeacher
+        ? updated[0].partner_paid === true
+        : updated[0].paid === true;
     res.json({
       payment: {
         recurringId: updated[0].recurring_assignment_id,
         lessonDate: updated[0].lesson_date instanceof Date
           ? updated[0].lesson_date.toISOString().slice(0, 10)
           : updated[0].lesson_date,
-        paid: updated[0].paid === true,
+        paid: viewerPaid,
       },
     });
   }),
@@ -303,7 +348,7 @@ recurringRouter.post(
     const { date } = skipSchema.parse(req.body);
 
     const { rows } = await query(
-      `SELECT ra.id, ra.status, ra.student_id, ra.slot_id, s.teacher_id, s.weekday
+      `SELECT ra.id, ra.status, ra.student_id, ra.slot_id, ra.starts_on, s.teacher_id, s.weekday
          FROM recurring_assignments ra
          JOIN slots s ON s.id = ra.slot_id WHERE ra.id = $1`,
       [id],
@@ -325,6 +370,9 @@ recurringRouter.post(
     }
     if (weekdayOf(date) !== ra.weekday) {
       throw new HttpError(400, 'That date does not match the lesson day.');
+    }
+    if (ra.starts_on && date < fmtDate(ra.starts_on)) {
+      throw new HttpError(400, 'That week is before this weekly spot starts.');
     }
 
     await query(

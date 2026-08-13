@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useToast } from '../components/Toast.jsx';
+import Modal, { ModalOption } from '../components/Modal.jsx';
 
 export default function Profile() {
   const { user, refresh } = useAuth();
@@ -389,6 +390,193 @@ export default function Profile() {
             {save.isPending ? 'Saving…' : 'Save profile'}
           </button>
         </form>
+      )}
+
+      {!loading && (!isTeacher || user.canBookAsStudent) && <PartnersPanel />}
+    </div>
+  );
+}
+
+function PartnersPanel() {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [codeInput, setCodeInput] = useState('');
+  const [removeTarget, setRemoveTarget] = useState(null);
+  const [confirmRegen, setConfirmRegen] = useState(false);
+
+  const partnersQuery = useQuery({
+    queryKey: ['my-partners'],
+    queryFn: () => api('/students/me/partners'),
+  });
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['my-partners'] });
+    queryClient.invalidateQueries({ queryKey: ['my-lessons'] });
+  };
+
+  const addPartner = useMutation({
+    mutationFn: (code) => api('/students/me/partners', { method: 'POST', body: { code } }),
+    onSuccess: () => {
+      toast('Partner added. You can each see the other’s lessons.');
+      setCodeInput('');
+      invalidate();
+    },
+    onError: (err) => toast(err.message),
+  });
+
+  const removePartner = useMutation({
+    mutationFn: (id) => api(`/students/me/partners/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      toast('Partner removed.');
+      setRemoveTarget(null);
+      invalidate();
+    },
+    onError: (err) => toast(err.message),
+  });
+
+  const regenerate = useMutation({
+    mutationFn: () => api('/students/me/partner-code/regenerate', { method: 'POST' }),
+    onSuccess: () => {
+      toast('New partner code created. The old code no longer works.');
+      setConfirmRegen(false);
+      invalidate();
+    },
+    onError: (err) => toast(err.message),
+  });
+
+  const copyCode = () => {
+    const code = partnersQuery.data?.partnerCode;
+    if (!code) return;
+    navigator.clipboard.writeText(code).then(() => toast('Partner code copied!'));
+  };
+
+  const data = partnersQuery.data;
+
+  return (
+    <div className="card" style={{ marginTop: '1.25rem' }}>
+      <div className="section-title">Lesson partners</div>
+      <p className="muted" style={{ fontSize: '13px', marginBottom: '0.9rem' }}>
+        Share your code with another student so you can see each other’s lessons. When you book,
+        you can choose which partner splits payment with you.
+      </p>
+
+      {partnersQuery.isLoading && <div className="loading">Loading…</div>}
+      {partnersQuery.isError && <p className="error-text">{partnersQuery.error.message}</p>}
+
+      {data && (
+        <>
+          <div className="field" style={{ marginBottom: '0.75rem' }}>
+            <label>Your partner code</label>
+            <div className="partner-code-row">
+              <div className="partner-code">{data.partnerCode}</div>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={copyCode}>
+                Copy
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setConfirmRegen(true)}
+              >
+                New code
+              </button>
+            </div>
+          </div>
+
+          <form
+            className="partner-add"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const code = codeInput.trim();
+              if (!code) return;
+              addPartner.mutate(code);
+            }}
+          >
+            <div className="field" style={{ flex: 1, marginBottom: 0 }}>
+              <label htmlFor="partner-code-input">Add a partner</label>
+              <input
+                id="partner-code-input"
+                value={codeInput}
+                onChange={(e) => setCodeInput(e.target.value.toUpperCase())}
+                placeholder="Enter their code"
+                autoComplete="off"
+                maxLength={16}
+              />
+            </div>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={addPartner.isPending || !codeInput.trim()}
+            >
+              {addPartner.isPending ? 'Adding…' : 'Add'}
+            </button>
+          </form>
+
+          <div className="section-title" style={{ marginTop: '1.1rem' }}>
+            Linked partners
+          </div>
+          {data.partners.length === 0 ? (
+            <p className="muted" style={{ fontSize: '14px' }}>
+              No partners yet. Ask someone for their code, or share yours.
+            </p>
+          ) : (
+            data.partners.map((p) => (
+              <div className="list-row" key={p.id}>
+                <div className="grow">{p.fullName}</div>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setRemoveTarget(p)}
+                >
+                  Remove
+                </button>
+              </div>
+            ))
+          )}
+        </>
+      )}
+
+      {removeTarget && (
+        <Modal
+          title={`Remove ${removeTarget.fullName}?`}
+          subtitle="You will no longer see each other’s lessons. Existing bookings are not cancelled."
+          onClose={() => !removePartner.isPending && setRemoveTarget(null)}
+        >
+          <ModalOption
+            label="Remove partner"
+            description="Stops sharing lessons with this account."
+            danger
+            disabled={removePartner.isPending}
+            onClick={() => removePartner.mutate(removeTarget.id)}
+          />
+          <ModalOption
+            label="Keep partner"
+            description="Close without changing anything."
+            disabled={removePartner.isPending}
+            onClick={() => setRemoveTarget(null)}
+          />
+        </Modal>
+      )}
+
+      {confirmRegen && (
+        <Modal
+          title="Create a new partner code?"
+          subtitle="Your current code will stop working. Anyone who has not added you yet will need the new code."
+          onClose={() => !regenerate.isPending && setConfirmRegen(false)}
+        >
+          <ModalOption
+            label="Create new code"
+            description="The old code can no longer be used to add you."
+            danger
+            disabled={regenerate.isPending}
+            onClick={() => regenerate.mutate()}
+          />
+          <ModalOption
+            label="Keep current code"
+            description="Close without changing anything."
+            disabled={regenerate.isPending}
+            onClick={() => setConfirmRegen(false)}
+          />
+        </Modal>
       )}
     </div>
   );

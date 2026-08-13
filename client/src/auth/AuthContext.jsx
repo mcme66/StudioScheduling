@@ -6,6 +6,7 @@ const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [freshSignIn, setFreshSignIn] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -24,23 +25,26 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async (credentials) => {
     const data = await api('/auth/login', { method: 'POST', body: credentials });
+    setFreshSignIn(true);
     setUser(data.user);
     return data.user;
   }, []);
 
   const register = useCallback(async (payload) => {
     const data = await api('/auth/register', { method: 'POST', body: payload });
+    setFreshSignIn(true);
     setUser(data.user);
     return data.user;
   }, []);
 
   const logout = useCallback(async () => {
     await api('/auth/logout', { method: 'POST' });
+    setFreshSignIn(false);
     setUser(null);
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, refresh }}>
+    <AuthContext.Provider value={{ user, loading, freshSignIn, login, register, logout, refresh }}>
       {children}
     </AuthContext.Provider>
   );

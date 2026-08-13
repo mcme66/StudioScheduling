@@ -1,5 +1,6 @@
 import { NavLink, Link, useNavigate, Outlet } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.jsx';
+import WhatsNewNotice from './WhatsNewNotice.jsx';
 
 export default function Layout() {
   const { user, logout } = useAuth();
@@ -64,6 +65,7 @@ export default function Layout() {
       <main>
         <Outlet />
       </main>
+      <WhatsNewNotice />
     </>
   );
 }

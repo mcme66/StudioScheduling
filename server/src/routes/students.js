@@ -4,6 +4,14 @@ import { query } from '../db.js';
 import { asyncHandler, HttpError } from '../middleware/error.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { resolveBookerStudentId } from '../utils/booker.js';
+import {
+  allocatePartnerCode,
+  listPartners,
+  MAX_PARTNERS,
+  normalizePartnerCode,
+  orderedPair,
+  partnerCount,
+} from '../utils/partners.js';
 
 export const studentsRouter = Router();
 
@@ -95,5 +103,105 @@ studentsRouter.patch(
       values,
     );
     res.json({ student: mapStudent(rows[0]) });
+  }),
+);
+
+const addPartnerSchema = z.object({
+  code: z.string().min(1).max(32),
+});
+
+async function partnersPayload(studentId) {
+  const { rows } = await query('SELECT partner_code FROM students WHERE id = $1', [studentId]);
+  if (!rows[0]) throw new HttpError(401, 'Account no longer exists.');
+  return {
+    partnerCode: rows[0].partner_code,
+    partners: await listPartners(studentId),
+  };
+}
+
+studentsRouter.get(
+  '/me/partners',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const studentId = await resolveBookerStudentId(req.user);
+    res.json(await partnersPayload(studentId));
+  }),
+);
+
+studentsRouter.post(
+  '/me/partners',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const studentId = await resolveBookerStudentId(req.user);
+    const code = normalizePartnerCode(addPartnerSchema.parse(req.body).code);
+    if (code.length !== 8) {
+      throw new HttpError(400, 'Enter a valid 8-character partner code.');
+    }
+
+    const { rows: mine } = await query('SELECT partner_code FROM students WHERE id = $1', [
+      studentId,
+    ]);
+    if (!mine[0]) throw new HttpError(401, 'Account no longer exists.');
+    if (mine[0].partner_code === code) {
+      throw new HttpError(400, 'That is your own partner code.');
+    }
+
+    const { rows: otherRows } = await query(
+      'SELECT id FROM students WHERE partner_code = $1',
+      [code],
+    );
+    const other = otherRows[0];
+    if (!other) throw new HttpError(404, 'No student has that partner code.');
+
+    const [a, b] = orderedPair(studentId, other.id);
+    const { rows: existing } = await query(
+      'SELECT id FROM student_partners WHERE student_a_id = $1 AND student_b_id = $2',
+      [a, b],
+    );
+    if (existing[0]) {
+      throw new HttpError(409, 'You are already partners with this student.');
+    }
+
+    const myCount = await partnerCount(studentId);
+    const theirCount = await partnerCount(other.id);
+    if (myCount >= MAX_PARTNERS || theirCount >= MAX_PARTNERS) {
+      throw new HttpError(400, `You can have at most ${MAX_PARTNERS} partners.`);
+    }
+
+    await query(
+      'INSERT INTO student_partners (student_a_id, student_b_id) VALUES ($1, $2)',
+      [a, b],
+    );
+    res.status(201).json(await partnersPayload(studentId));
+  }),
+);
+
+studentsRouter.delete(
+  '/me/partners/:id',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const studentId = await resolveBookerStudentId(req.user);
+    const otherId = Number(req.params.id);
+    if (!Number.isInteger(otherId) || otherId <= 0) {
+      throw new HttpError(400, 'Invalid partner.');
+    }
+    const [a, b] = orderedPair(studentId, otherId);
+    const { rows } = await query(
+      'DELETE FROM student_partners WHERE student_a_id = $1 AND student_b_id = $2 RETURNING id',
+      [a, b],
+    );
+    if (!rows[0]) throw new HttpError(404, 'That partner is not on your list.');
+    res.json(await partnersPayload(studentId));
+  }),
+);
+
+studentsRouter.post(
+  '/me/partner-code/regenerate',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const studentId = await resolveBookerStudentId(req.user);
+    const code = await allocatePartnerCode();
+    await query('UPDATE students SET partner_code = $1 WHERE id = $2', [code, studentId]);
+    res.json(await partnersPayload(studentId));
   }),
 );
