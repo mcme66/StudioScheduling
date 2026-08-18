@@ -18,6 +18,7 @@ export default function AddToCalendar({
   durationMin,
   manageUrl = `${window.location.origin}/my-lessons`,
   subtitle,
+  title,
 }) {
   const event = buildLessonEvent({
     teacherName,
@@ -26,6 +27,7 @@ export default function AddToCalendar({
     startTime,
     durationMin,
     manageUrl,
+    title,
   });
 
   return (

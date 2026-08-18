@@ -58,7 +58,7 @@ const availabilityQuerySchema = z.object({
   time: z.string().regex(/^\d{2}:\d{2}$/, 'time must be HH:MM.'),
 });
 
-const MAX_WEEKS_AHEAD = 2;
+const MAX_WEEKS_AHEAD = 4;
 
 studiosRouter.get(
   '/:slug/availability',
@@ -75,7 +75,7 @@ studiosRouter.get(
 
     const maxDate = dateForWeekday(addWeeks(getMonday(today), MAX_WEEKS_AHEAD), 0);
     if (date > maxDate) {
-      throw new HttpError(400, 'You can only search up to 2 weeks ahead.');
+      throw new HttpError(400, 'You can only search up to 5 weeks ahead.');
     }
 
     const { rows: studioRows } = await query('SELECT id, name, slug FROM studios WHERE slug = $1', [
@@ -98,15 +98,26 @@ studiosRouter.get(
           AND s.weekday = $2
           AND s.start_time = $3::time
           AND (s.one_off_date IS NULL OR s.one_off_date = $4::date)
+          AND (
+            s.one_off_date IS NOT NULL
+            OR (
+              (s.series_start_date IS NULL OR s.series_start_date <= $4::date)
+              AND (s.series_end_date IS NULL OR s.series_end_date >= $4::date)
+            )
+          )
           AND NOT EXISTS (
             SELECT 1 FROM recurring_assignments ra
              WHERE ra.slot_id = s.id AND ra.status = 'approved'
                AND ra.starts_on <= $4::date
+               AND (s.series_start_date IS NULL OR s.series_start_date <= $4::date)
+               AND (s.series_end_date IS NULL OR s.series_end_date >= $4::date)
           )
           AND NOT EXISTS (
             SELECT 1 FROM recurring_assignments ra
              WHERE ra.slot_id = s.id AND ra.status = 'pending'
                AND ra.starts_on <= $4::date
+               AND (s.series_start_date IS NULL OR s.series_start_date <= $4::date)
+               AND (s.series_end_date IS NULL OR s.series_end_date >= $4::date)
           )
           AND NOT EXISTS (
             SELECT 1 FROM bookings b

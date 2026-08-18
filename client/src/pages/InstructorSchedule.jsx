@@ -19,9 +19,23 @@ import {
   todayISO,
   isSlotPast,
   isSlotBookable,
+  MAX_WEEKS_AHEAD,
 } from '../lib/format.js';
 
-const MAX_WEEKS_AHEAD = 2;
+function partnersForLesson(partners, childName) {
+  const eligible = (partners || []).filter(
+    (p) =>
+      !p.scopedChildName ||
+      (childName && p.scopedChildName.toLowerCase() === childName.toLowerCase()),
+  );
+  const seen = new Set();
+  return eligible.filter((p) => {
+    if (seen.has(p.id)) return false;
+    seen.add(p.id);
+    return true;
+  });
+}
+
 // Display order: Mon..Sun.
 const DISPLAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
@@ -156,7 +170,9 @@ export default function InstructorSchedule() {
         return;
       }
     }
-    if (partners.length && selectedPaymentPartnerId === undefined) {
+    if (partnersForLesson(partners, isParent ? selectedChild : null).length &&
+      selectedPaymentPartnerId === undefined
+    ) {
       setPartnerPickerOpen(true);
       return;
     }
@@ -166,7 +182,7 @@ export default function InstructorSchedule() {
   const confirmChildBooking = (childName) => {
     setSelectedChild(childName);
     setChildPickerOpen(false);
-    if (partners.length) {
+    if (partnersForLesson(partners, childName).length) {
       setPartnerPickerOpen(true);
       return;
     }
@@ -490,12 +506,16 @@ export default function InstructorSchedule() {
       {partnerPickerOpen && (
         <Modal
           title="Split payment with a partner?"
-          subtitle="All of your partners can still see this lesson. This only chooses who can mark their half as paid."
+          subtitle={
+            selectedChild
+              ? `Only partners linked to ${selectedChild} can see this lesson. This chooses who can mark their half as paid.`
+              : 'Your partners can still see this lesson. This only chooses who can mark their half as paid.'
+          }
           onClose={() => !bookMutation.isPending && setPartnerPickerOpen(false)}
         >
-          {partners.map((p) => (
+          {partnersForLesson(partners, isParent ? selectedChild : null).map((p) => (
             <ModalOption
-              key={p.id}
+              key={p.linkId || p.id}
               label={p.fullName}
               description="This partner can mark their half as paid"
               disabled={bookMutation.isPending}

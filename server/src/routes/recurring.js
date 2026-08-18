@@ -125,7 +125,12 @@ recurringRouter.post(
       throw new HttpError(409, 'This time already has a pending weekly spot request.');
     }
 
-    const paymentPartnerId = await resolvePaymentPartnerId(bookerStudentId, requestedPartnerId);
+    const paymentPartnerId = await resolvePaymentPartnerId(
+      bookerStudentId,
+      requestedPartnerId,
+      query,
+      childName,
+    );
 
     const { rows } = await query(
       `INSERT INTO recurring_assignments
@@ -348,7 +353,8 @@ recurringRouter.post(
     const { date } = skipSchema.parse(req.body);
 
     const { rows } = await query(
-      `SELECT ra.id, ra.status, ra.student_id, ra.slot_id, ra.starts_on, s.teacher_id, s.weekday
+      `SELECT ra.id, ra.status, ra.student_id, ra.slot_id, ra.starts_on, s.teacher_id, s.weekday,
+              s.series_start_date, s.series_end_date
          FROM recurring_assignments ra
          JOIN slots s ON s.id = ra.slot_id WHERE ra.id = $1`,
       [id],
@@ -373,6 +379,15 @@ recurringRouter.post(
     }
     if (ra.starts_on && date < fmtDate(ra.starts_on)) {
       throw new HttpError(400, 'That week is before this weekly spot starts.');
+    }
+    if (
+      !isDateInSeries(
+        date,
+        ra.series_start_date ? fmtDate(ra.series_start_date) : null,
+        ra.series_end_date ? fmtDate(ra.series_end_date) : null,
+      )
+    ) {
+      throw new HttpError(400, 'That week is outside this weekly slot.');
     }
 
     await query(

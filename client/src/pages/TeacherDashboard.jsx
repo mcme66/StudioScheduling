@@ -6,6 +6,7 @@ import { useToast } from '../components/Toast.jsx';
 import SharePanel from '../components/SharePanel.jsx';
 import PaidToggle from '../components/PaidToggle.jsx';
 import Modal, { ModalOption } from '../components/Modal.jsx';
+import AddToCalendar from '../components/AddToCalendar.jsx';
 import {
   WEEKDAYS,
   fmtTime,
@@ -62,6 +63,22 @@ function lessonPersonName(student) {
   return student.childName || student.name;
 }
 
+function teacherLessonCalendarTarget(student, lessonDate, startTime, durationMin) {
+  const title = student.childName
+    ? `${student.childName} — lesson`
+    : `Lesson with ${student.name}`;
+  return {
+    teacherName: student.name,
+    childName: student.childName,
+    title,
+    lessonDate,
+    startTime,
+    durationMin,
+    manageUrl: `${window.location.origin}/teacher`,
+    subtitle: `${fmtDate(lessonDate, { weekday: 'short', month: 'short', day: 'numeric' })} · ${fmtTimeRange(startTime, durationMin)}`,
+  };
+}
+
 const TIME_OPTIONS = (() => {
   const out = [];
   for (let h = 7; h <= 20; h++) {
@@ -81,6 +98,7 @@ export default function TeacherDashboard() {
   const [weekOffset, setWeekOffset] = useState(0);
   const weekStart = addWeeks(baseMonday, weekOffset);
   const [dialog, setDialog] = useState(null);
+  const [calendarTarget, setCalendarTarget] = useState(null);
 
   const slotsQuery = useQuery({
     queryKey: ['slots', weekStart],
@@ -319,6 +337,7 @@ export default function TeacherDashboard() {
               recurringPaidMutation.mutate({ id, date, paid })
             }
             paidPending={paidMutation.isPending || recurringPaidMutation.isPending}
+            onAddToCalendar={setCalendarTarget}
           />
         )}
       </div>
@@ -537,6 +556,20 @@ export default function TeacherDashboard() {
         />
       )}
 
+      {calendarTarget && (
+        <AddToCalendar
+          teacherName={calendarTarget.teacherName}
+          childName={calendarTarget.childName}
+          title={calendarTarget.title}
+          lessonDate={calendarTarget.lessonDate}
+          startTime={calendarTarget.startTime}
+          durationMin={calendarTarget.durationMin}
+          manageUrl={calendarTarget.manageUrl}
+          subtitle={calendarTarget.subtitle}
+          onClose={() => setCalendarTarget(null)}
+        />
+      )}
+
     </div>
   );
 }
@@ -550,6 +583,7 @@ function BookingsList({
   onPaidChange,
   onRecurringPaidChange,
   paidPending,
+  onAddToCalendar,
 }) {
   const { bookings, recurring, exceptions = [] } = data;
   if (!bookings.length && !recurring.length) {
@@ -604,6 +638,22 @@ function BookingsList({
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
+                  onClick={() =>
+                    onAddToCalendar(
+                      teacherLessonCalendarTarget(
+                        r.student,
+                        r.lessonDate || date,
+                        r.startTime,
+                        r.durationMin,
+                      ),
+                    )
+                  }
+                >
+                  Calendar
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
                   onClick={() => onManageRecurring(r)}
                 >
                   Cancel…
@@ -638,6 +688,22 @@ function BookingsList({
                 onChange={(paid) => onPaidChange(b.id, paid)}
               />
             )}
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() =>
+                onAddToCalendar(
+                  teacherLessonCalendarTarget(
+                    b.student,
+                    b.lessonDate,
+                    b.startTime,
+                    b.durationMin,
+                  ),
+                )
+              }
+            >
+              Calendar
+            </button>
             <button
               type="button"
               className="btn btn-ghost btn-sm"

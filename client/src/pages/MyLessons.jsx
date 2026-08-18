@@ -10,6 +10,15 @@ import { WEEKDAYS, fmtTimeRange, fmtDate, upcomingWeekdayDates, todayISO } from 
 
 const UPCOMING_WEEKS = 6;
 
+function upcomingOccurrences(r) {
+  const from = r.startsOn && r.startsOn > todayISO() ? r.startsOn : todayISO();
+  return upcomingWeekdayDates(r.weekday, UPCOMING_WEEKS, from).filter(
+    (date) =>
+      (!r.seriesStartDate || date >= r.seriesStartDate) &&
+      (!r.seriesEndDate || date <= r.seriesEndDate),
+  );
+}
+
 function lessonContact(item) {
   const bits = [item.teacher.name];
   if (item.childName) bits.push(`For ${item.childName}`);
@@ -73,6 +82,10 @@ export default function MyLessons() {
     onError: (err) => toast(err.message),
   });
 
+  const weeklySpots = (data?.recurring || [])
+    .map((r) => ({ ...r, occurrences: upcomingOccurrences(r) }))
+    .filter((r) => r.occurrences.length > 0);
+
   const cancel = (id) => {
     if (window.confirm('Cancel this lesson? The slot will reopen for others.')) {
       cancelMutation.mutate(id);
@@ -89,17 +102,15 @@ export default function MyLessons() {
 
       {data && (
         <>
-          {data.recurring.length > 0 && (
+          {weeklySpots.length > 0 && (
             <div className="card">
               <div className="section-title">Weekly spots</div>
-              {data.recurring.map((r) => {
+              {weeklySpots.map((r) => {
                 const exceptionFor = (date) =>
                   (r.exceptions || []).find((e) => e.date === date)?.kind || null;
                 const paidFor = (date) =>
                   (r.payments || []).find((p) => p.date === date)?.paid === true;
-                const from =
-                  r.startsOn && r.startsOn > todayISO() ? r.startsOn : todayISO();
-                const occurrences = upcomingWeekdayDates(r.weekday, UPCOMING_WEEKS, from);
+                const occurrences = r.occurrences;
                 return (
                   <div className="weekly-spot" key={`r-${r.id}`}>
                     <div className="list-row">

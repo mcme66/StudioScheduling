@@ -72,6 +72,22 @@ export function isDateInSeries(lessonDate, seriesStartDate, seriesEndDate) {
   return true;
 }
 
+/**
+ * Whether an approved weekly assignment covers a concrete lesson date.
+ * Honors the student's start week and the slot's series bounds.
+ */
+export function recurringCoversDate(lessonDate, startsOn, seriesStartDate, seriesEndDate) {
+  if (startsOn && lessonDate < startsOn) return false;
+  return isDateInSeries(lessonDate, seriesStartDate, seriesEndDate);
+}
+
+/** Next date on or after `fromISO` that falls on `weekday` (0=Sun..6=Sat). */
+export function nextWeekdayOnOrAfter(fromISO, weekday) {
+  const start = parseDate(fromISO);
+  const delta = (weekday - start.getUTCDay() + 7) % 7;
+  return toISODate(new Date(start.getTime() + delta * DAY_MS));
+}
+
 export function todayISO() {
   return toLocalISODate(new Date());
 }

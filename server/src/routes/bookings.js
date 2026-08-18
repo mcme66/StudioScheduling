@@ -9,12 +9,15 @@ import {
   todayISO,
   isLessonPast,
   isDateInSeries,
+  recurringCoversDate,
+  nextWeekdayOnOrAfter,
 } from '../utils/week.js';
 import { sendBookingConfirmation } from '../services/email.js';
 import { normalizeChildrenNames } from './students.js';
 import { resolveBookerStudentId } from '../utils/booker.js';
 import {
-  partnerIdsFor,
+  partnerLinksFor,
+  partnerCoversLesson,
   paymentPartnerPayload,
   resolvePaymentPartnerId,
 } from '../utils/partners.js';
@@ -91,6 +94,7 @@ bookingsRouter.post(
         bookerStudentId,
         requestedPartnerId,
         (text, params) => client.query(text, params),
+        childName,
       );
 
       const { rows: slotRows } = await client.query(
@@ -150,7 +154,12 @@ bookingsRouter.post(
       // assignment starts stay open for one-off bookings.
       const recCovers =
         recRows[0] &&
-        (!recRows[0].starts_on || lessonDate >= fmtDate(recRows[0].starts_on));
+        recurringCoversDate(
+          lessonDate,
+          recRows[0].starts_on ? fmtDate(recRows[0].starts_on) : null,
+          slot.series_start_date ? fmtDate(slot.series_start_date) : null,
+          slot.series_end_date ? fmtDate(slot.series_end_date) : null,
+        );
       if (recCovers && !skippedThisWeek) {
         if (recRows[0].student_id === bookerStudentId) {
           throw new HttpError(409, 'You already hold this time as a weekly spot.');
@@ -166,7 +175,12 @@ bookingsRouter.post(
       const pendingCovers =
         pendingRows[0] &&
         pendingRows[0].student_id !== bookerStudentId &&
-        (!pendingRows[0].starts_on || lessonDate >= fmtDate(pendingRows[0].starts_on));
+        recurringCoversDate(
+          lessonDate,
+          pendingRows[0].starts_on ? fmtDate(pendingRows[0].starts_on) : null,
+          slot.series_start_date ? fmtDate(slot.series_start_date) : null,
+          slot.series_end_date ? fmtDate(slot.series_end_date) : null,
+        );
       if (pendingCovers) {
         throw new HttpError(409, 'This time has a pending weekly spot request.');
       }
@@ -215,8 +229,8 @@ bookingsRouter.get(
   requireAuth,
   asyncHandler(async (req, res) => {
     const bookerStudentId = await resolveBookerStudentId(req.user);
-    const partnerIds = await partnerIdsFor(bookerStudentId);
-    const visibleIds = [bookerStudentId, ...partnerIds];
+    const links = await partnerLinksFor(bookerStudentId);
+    const visibleIds = [bookerStudentId, ...new Set(links.map((l) => l.partnerId))];
 
     const { rows: bookings } = await query(
       `SELECT b.id, b.lesson_date, b.status, b.created_at, b.paid, b.partner_paid, b.child_name,
@@ -238,6 +252,7 @@ bookingsRouter.get(
       `SELECT ra.id, ra.slot_id, ra.child_name, ra.student_id, ra.payment_partner_id, ra.starts_on,
               st.full_name AS booker_name, pp.full_name AS payment_partner_name,
               s.weekday, s.start_time, s.duration_min, s.price_cents,
+              s.series_start_date, s.series_end_date,
               t.id AS teacher_id, t.full_name AS teacher_name, t.track_payments
          FROM recurring_assignments ra
          JOIN slots s ON s.id = ra.slot_id
@@ -249,10 +264,17 @@ bookingsRouter.get(
       [visibleIds],
     );
 
+    const visibleBookings = bookings.filter((b) =>
+      partnerCoversLesson(links, bookerStudentId, b.student_id, b.child_name),
+    );
+    const visibleRecurring = recurring.filter((r) =>
+      partnerCoversLesson(links, bookerStudentId, r.student_id, r.child_name),
+    );
+
     const today = todayISO();
 
     // Upcoming per-week exceptions for this student's weekly slots.
-    const recurringSlotIds = recurring.map((r) => r.slot_id);
+    const recurringSlotIds = visibleRecurring.map((r) => r.slot_id);
     let exceptionsBySlot = new Map();
     if (recurringSlotIds.length) {
       const { rows: excRows } = await query(
@@ -268,8 +290,8 @@ bookingsRouter.get(
     }
 
     let paymentsByRecurring = new Map();
-    if (recurring.length) {
-      const recurringIds = recurring.map((r) => r.id);
+    if (visibleRecurring.length) {
+      const recurringIds = visibleRecurring.map((r) => r.id);
       const { rows: payRows } = await query(
         `SELECT recurring_assignment_id, lesson_date, paid, partner_paid
            FROM recurring_lesson_payments
@@ -301,7 +323,7 @@ bookingsRouter.get(
       };
     };
 
-    const mapped = bookings.map((b) => {
+    const mapped = visibleBookings.map((b) => {
       const access = accessFor(b);
       return {
         id: b.id,
@@ -325,10 +347,16 @@ bookingsRouter.get(
     res.json({
       upcoming: mapped.filter((b) => !b.past),
       past: mapped.filter((b) => b.past).reverse(),
-      recurring: recurring.map((r) => {
+      recurring: visibleRecurring.flatMap((r) => {
+        const startsOn = r.starts_on ? fmtDate(r.starts_on) : null;
+        const seriesStart = r.series_start_date ? fmtDate(r.series_start_date) : null;
+        const seriesEnd = r.series_end_date ? fmtDate(r.series_end_date) : null;
+        const from = [today, startsOn, seriesStart].filter(Boolean).reduce((a, b) => (a > b ? a : b));
+        const nextOccurrence = nextWeekdayOnOrAfter(from, r.weekday);
+        if (!recurringCoversDate(nextOccurrence, startsOn, seriesStart, seriesEnd)) return [];
         const access = accessFor(r);
         const rawPayments = paymentsByRecurring.get(r.id) || [];
-        return {
+        return [{
           id: r.id,
           slotId: r.slot_id,
           weekday: r.weekday,
@@ -337,7 +365,9 @@ bookingsRouter.get(
           priceCents: r.price_cents,
           trackPayments: r.track_payments === true,
           childName: r.child_name || null,
-          startsOn: r.starts_on ? fmtDate(r.starts_on) : null,
+          startsOn,
+          seriesStartDate: seriesStart,
+          seriesEndDate: seriesEnd,
           teacher: { id: r.teacher_id, name: r.teacher_name },
           exceptions: exceptionsBySlot.get(r.slot_id) || [],
           payments: rawPayments.map((p) => ({
@@ -349,7 +379,7 @@ bookingsRouter.get(
           paymentPartner: access.paymentPartner,
           canMarkPaid: access.canMarkPaid,
           canManage: access.canManage,
-        };
+        }];
       }),
     });
   }),

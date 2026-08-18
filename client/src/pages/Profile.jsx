@@ -10,6 +10,7 @@ export default function Profile() {
   const { user, refresh } = useAuth();
   const toast = useToast();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const isTeacher = user?.role === 'teacher';
 
   const teacherQuery = useQuery({
@@ -131,6 +132,7 @@ export default function Profile() {
       toast('Profile saved.');
       setError('');
       await refresh();
+      queryClient.invalidateQueries({ queryKey: ['my-partners'] });
       if (isTeacher) {
         await teacherQuery.refetch();
         await myStudiosQuery.refetch();
@@ -402,7 +404,7 @@ function PartnersPanel() {
   const queryClient = useQueryClient();
   const [codeInput, setCodeInput] = useState('');
   const [removeTarget, setRemoveTarget] = useState(null);
-  const [confirmRegen, setConfirmRegen] = useState(false);
+  const [confirmRegen, setConfirmRegen] = useState(null);
 
   const partnersQuery = useQuery({
     queryKey: ['my-partners'],
@@ -417,7 +419,7 @@ function PartnersPanel() {
   const addPartner = useMutation({
     mutationFn: (code) => api('/students/me/partners', { method: 'POST', body: { code } }),
     onSuccess: () => {
-      toast('Partner added. You can each see the other’s lessons.');
+      toast('Partner added. Shared lessons will show up under My lessons.');
       setCodeInput('');
       invalidate();
     },
@@ -425,7 +427,7 @@ function PartnersPanel() {
   });
 
   const removePartner = useMutation({
-    mutationFn: (id) => api(`/students/me/partners/${id}`, { method: 'DELETE' }),
+    mutationFn: (linkId) => api(`/students/me/partners/${linkId}`, { method: 'DELETE' }),
     onSuccess: () => {
       toast('Partner removed.');
       setRemoveTarget(null);
@@ -435,29 +437,35 @@ function PartnersPanel() {
   });
 
   const regenerate = useMutation({
-    mutationFn: () => api('/students/me/partner-code/regenerate', { method: 'POST' }),
+    mutationFn: (childName) =>
+      api('/students/me/partner-code/regenerate', {
+        method: 'POST',
+        body: childName ? { childName } : {},
+      }),
     onSuccess: () => {
       toast('New partner code created. The old code no longer works.');
-      setConfirmRegen(false);
+      setConfirmRegen(null);
       invalidate();
     },
     onError: (err) => toast(err.message),
   });
 
-  const copyCode = () => {
-    const code = partnersQuery.data?.partnerCode;
+  const copyCode = (code) => {
     if (!code) return;
     navigator.clipboard.writeText(code).then(() => toast('Partner code copied!'));
   };
 
   const data = partnersQuery.data;
+  const isParent = data?.isParent === true;
+  const childCodes = data?.childPartnerCodes || [];
 
   return (
     <div className="card" style={{ marginTop: '1.25rem' }}>
       <div className="section-title">Lesson partners</div>
       <p className="muted" style={{ fontSize: '13px', marginBottom: '0.9rem' }}>
-        Share your code with another student so you can see each other’s lessons. When you book,
-        you can choose which partner splits payment with you.
+        {isParent
+          ? 'Each child has a partner code. Sharing a code only shares that child’s lessons. When you book, you can choose which of that child’s partners splits payment.'
+          : 'Share your code with another student so you can see each other’s lessons. When you book, you can choose which partner splits payment with you.'}
       </p>
 
       {partnersQuery.isLoading && <div className="loading">Loading…</div>}
@@ -465,22 +473,57 @@ function PartnersPanel() {
 
       {data && (
         <>
-          <div className="field" style={{ marginBottom: '0.75rem' }}>
-            <label>Your partner code</label>
-            <div className="partner-code-row">
-              <div className="partner-code">{data.partnerCode}</div>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={copyCode}>
-                Copy
-              </button>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => setConfirmRegen(true)}
-              >
-                New code
-              </button>
+          {isParent ? (
+            childCodes.length === 0 ? (
+              <p className="muted" style={{ fontSize: '14px', marginBottom: '0.75rem' }}>
+                Add children on your profile to get a partner code for each child.
+              </p>
+            ) : (
+              childCodes.map((c) => (
+                <div className="field" key={c.childName} style={{ marginBottom: '0.75rem' }}>
+                  <label>{c.childName}&apos;s partner code</label>
+                  <div className="partner-code-row">
+                    <div className="partner-code">{c.partnerCode}</div>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => copyCode(c.partnerCode)}
+                    >
+                      Copy
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setConfirmRegen({ childName: c.childName })}
+                    >
+                      New code
+                    </button>
+                  </div>
+                </div>
+              ))
+            )
+          ) : (
+            <div className="field" style={{ marginBottom: '0.75rem' }}>
+              <label>Your partner code</label>
+              <div className="partner-code-row">
+                <div className="partner-code">{data.partnerCode}</div>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => copyCode(data.partnerCode)}
+                >
+                  Copy
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setConfirmRegen({})}
+                >
+                  New code
+                </button>
+              </div>
             </div>
-          </div>
+          )}
 
           <form
             className="partner-add"
@@ -520,8 +563,13 @@ function PartnersPanel() {
             </p>
           ) : (
             data.partners.map((p) => (
-              <div className="list-row" key={p.id}>
-                <div className="grow">{p.fullName}</div>
+              <div className="list-row" key={p.linkId || `${p.id}-${p.scopedChildName || 'all'}`}>
+                <div className="grow">
+                  {p.fullName}
+                  {p.scopedChildName && (
+                    <div className="contact">{p.scopedChildName}&apos;s lessons</div>
+                  )}
+                </div>
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
@@ -538,15 +586,23 @@ function PartnersPanel() {
       {removeTarget && (
         <Modal
           title={`Remove ${removeTarget.fullName}?`}
-          subtitle="You will no longer see each other’s lessons. Existing bookings are not cancelled."
+          subtitle={
+            removeTarget.scopedChildName
+              ? `Stops sharing ${removeTarget.scopedChildName}’s lessons with this account. Existing bookings are not cancelled.`
+              : 'You will no longer see each other’s lessons. Existing bookings are not cancelled.'
+          }
           onClose={() => !removePartner.isPending && setRemoveTarget(null)}
         >
           <ModalOption
             label="Remove partner"
-            description="Stops sharing lessons with this account."
+            description={
+              removeTarget.scopedChildName
+                ? `Stops sharing ${removeTarget.scopedChildName}’s lessons.`
+                : 'Stops sharing lessons with this account.'
+            }
             danger
             disabled={removePartner.isPending}
-            onClick={() => removePartner.mutate(removeTarget.id)}
+            onClick={() => removePartner.mutate(removeTarget.linkId || removeTarget.id)}
           />
           <ModalOption
             label="Keep partner"
@@ -560,21 +616,25 @@ function PartnersPanel() {
       {confirmRegen && (
         <Modal
           title="Create a new partner code?"
-          subtitle="Your current code will stop working. Anyone who has not added you yet will need the new code."
-          onClose={() => !regenerate.isPending && setConfirmRegen(false)}
+          subtitle={
+            confirmRegen.childName
+              ? `${confirmRegen.childName}’s current code will stop working. Anyone who has not added you yet will need the new code.`
+              : 'Your current code will stop working. Anyone who has not added you yet will need the new code.'
+          }
+          onClose={() => !regenerate.isPending && setConfirmRegen(null)}
         >
           <ModalOption
             label="Create new code"
             description="The old code can no longer be used to add you."
             danger
             disabled={regenerate.isPending}
-            onClick={() => regenerate.mutate()}
+            onClick={() => regenerate.mutate(confirmRegen.childName)}
           />
           <ModalOption
             label="Keep current code"
             description="Close without changing anything."
             disabled={regenerate.isPending}
-            onClick={() => setConfirmRegen(false)}
+            onClick={() => setConfirmRegen(null)}
           />
         </Modal>
       )}

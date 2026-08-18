@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { pool, query } from './db.js';
 import { todayISO, getMonday, dateForWeekday, addWeeks, addDays, weekdayOf } from './utils/week.js';
-import { allocatePartnerCode, orderedPair } from './utils/partners.js';
+import { allocatePartnerCode, orderedPair, syncChildPartnerCodes } from './utils/partners.js';
 
 /**
  * Demo data for local testing. Safe to re-run.
@@ -311,11 +311,16 @@ async function seed() {
   });
 
   const [a, b] = orderedPair(janeId, parentId);
+  await syncChildPartnerCodes(parentId, ['Alina Metler', 'Ian Metler']);
   await query(
-    `INSERT INTO student_partners (student_a_id, student_b_id)
-     VALUES ($1, $2)
-     ON CONFLICT (student_a_id, student_b_id) DO NOTHING`,
+    `DELETE FROM student_partners WHERE student_a_id = $1 AND student_b_id = $2`,
     [a, b],
+  );
+  await query(
+    `INSERT INTO student_partners
+       (student_a_id, student_b_id, scoped_owner_id, scoped_child_name)
+     VALUES ($1, $2, $3, $4)`,
+    [a, b, parentId, 'Alina Metler'],
   );
 
   // Allen: forever weekly template slots
@@ -453,7 +458,7 @@ async function seed() {
   console.log('  • hidden@example.com  Hidden         inactive listing');
   console.log('\nStudents (password: password123)');
   console.log('  • student@example.com  Jane Student   regular student + weekly Fri 3pm');
-  console.log('  • parent@example.com   Sam Metler     parent (Alina, Ian); partnered with Jane');
+  console.log('  • parent@example.com   Sam Metler     parent (Alina, Ian); Jane shares Alina');
   console.log('  • alex@example.com     Alex Rivera    pending weekly Wed 4pm');
   console.log('\nAlso seeded: forever slots, a 6-week Wed 6pm series, a one-time Thu slot,');
   console.log('parent child bookings, and a pending weekly request for the teacher dashboard.');

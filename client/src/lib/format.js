@@ -114,9 +114,12 @@ export function isSlotBookable(slot) {
   return slot.status === 'open' && !isSlotPast(slot.lessonDate, slot.startTime);
 }
 
-/** Last bookable date (Sunday of the week 2 weeks ahead). */
+/** How many weeks past the current week students can browse and book (offset 0 is this week). */
+export const MAX_WEEKS_AHEAD = 4;
+
+/** Last bookable date (Sunday of the farthest student-visible week). */
 export function maxBookableDate() {
-  const monday = addWeeks(getMonday(todayISO()), 2);
+  const monday = addWeeks(getMonday(todayISO()), MAX_WEEKS_AHEAD);
   return dateForWeekday(monday, 0);
 }
 

@@ -27,7 +27,7 @@ function escapeIcsText(value) {
 }
 
 /**
- * @param {{ teacherName: string, childName?: string|null, lessonDate: string, startTime: string, durationMin: number, manageUrl?: string }} input
+ * @param {{ teacherName: string, childName?: string|null, lessonDate: string, startTime: string, durationMin: number, manageUrl?: string, title?: string }} input
  */
 export function buildLessonEvent({
   teacherName,
@@ -36,10 +36,11 @@ export function buildLessonEvent({
   startTime,
   durationMin,
   manageUrl = '',
+  title: titleOverride,
 }) {
-  const title = childName
-    ? `${childName} — lesson with ${teacherName}`
-    : `Lesson with ${teacherName}`;
+  const title =
+    titleOverride ||
+    (childName ? `${childName} — lesson with ${teacherName}` : `Lesson with ${teacherName}`);
   const description = manageUrl
     ? `Lesson booking.\nManage your lessons: ${manageUrl}`
     : 'Lesson booking.';

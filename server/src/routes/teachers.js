@@ -9,11 +9,12 @@ import {
   isValidDateStr,
   todayISO,
   isDateInSeries,
+  recurringCoversDate,
 } from '../utils/week.js';
 import { getTeacherStudios, teacherListedAtStudio } from '../utils/teacherStudios.js';
 import { sanitizeRichText } from '../utils/sanitizeHtml.js';
 import { ensureLinkedStudentForTeacher, tryResolveBookerStudentId } from '../utils/booker.js';
-import { partnerIdsFor } from '../utils/partners.js';
+import { partnerLinksFor, partnerCoversLesson } from '../utils/partners.js';
 
 export const teachersRouter = Router();
 
@@ -217,6 +218,7 @@ teachersRouter.get(
     const { rows: recurring } = await query(
       `SELECT ra.id, ra.child_name, ra.payment_partner_id, ra.starts_on, pp.full_name AS payment_partner_name,
               s.id AS slot_id, s.weekday, s.start_time, s.duration_min,
+              s.series_start_date, s.series_end_date,
               st.full_name AS student_name, st.email AS student_email, st.phone AS student_phone
          FROM recurring_assignments ra
          JOIN slots s ON s.id = ra.slot_id
@@ -276,7 +278,13 @@ teachersRouter.get(
       recurring: recurring.flatMap((r) => {
         const lessonDate = weekRange ? dateForWeekday(weekRange.monday, r.weekday) : null;
         const startsOn = r.starts_on ? fmtDate(r.starts_on) : null;
-        if (lessonDate && startsOn && lessonDate < startsOn) return [];
+        const seriesStart = r.series_start_date ? fmtDate(r.series_start_date) : null;
+        const seriesEnd = r.series_end_date ? fmtDate(r.series_end_date) : null;
+        if (lessonDate) {
+          if (!recurringCoversDate(lessonDate, startsOn, seriesStart, seriesEnd)) return [];
+        } else if (seriesEnd && seriesEnd < todayISO()) {
+          return [];
+        }
         const pay = lessonDate
           ? recurringPayments.get(`${r.id}:${lessonDate}`)
           : null;
@@ -407,7 +415,7 @@ teachersRouter.get(
     let myPending = [];
     let exceptions = [];
     const meId = await tryResolveBookerStudentId(req.user);
-    const partnerIdSet = new Set(meId ? await partnerIdsFor(meId) : []);
+    const partnerLinks = meId ? await partnerLinksFor(meId) : [];
     if (slotIds.length) {
       const [approvedRes, bookedRes, pendingRes, exceptionsRes] = await Promise.all([
         query(
@@ -459,7 +467,7 @@ teachersRouter.get(
 
     const partnerLabel = (row) => {
       if (!row || !meId || row.student_id === meId) return null;
-      if (!partnerIdSet.has(row.student_id)) return null;
+      if (!partnerCoversLesson(partnerLinks, meId, row.student_id, row.child_name)) return null;
       return {
         name: row.full_name,
         childName: row.child_name || null,
