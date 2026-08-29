@@ -414,10 +414,11 @@ teachersRouter.get(
     let pending = [];
     let myPending = [];
     let exceptions = [];
+    let invites = [];
     const meId = await tryResolveBookerStudentId(req.user);
     const partnerLinks = meId ? await partnerLinksFor(meId) : [];
     if (slotIds.length) {
-      const [approvedRes, bookedRes, pendingRes, exceptionsRes] = await Promise.all([
+      const [approvedRes, bookedRes, pendingRes, exceptionsRes, invitesRes] = await Promise.all([
         query(
           `SELECT ra.slot_id, ra.student_id, ra.child_name, ra.starts_on, st.full_name
              FROM recurring_assignments ra JOIN students st ON st.id = ra.student_id
@@ -443,11 +444,20 @@ teachersRouter.get(
             WHERE slot_id = ANY($1::int[]) AND exception_date BETWEEN $2 AND $3`,
           [slotIds, monday, sunday],
         ),
+        query(
+          `SELECT li.slot_id, li.student_id, li.lesson_date, st.full_name
+             FROM lesson_invites li
+             JOIN students st ON st.id = li.student_id
+            WHERE li.status = 'pending' AND li.slot_id = ANY($1::int[])
+              AND li.lesson_date BETWEEN $2 AND $3`,
+          [slotIds, monday, sunday],
+        ),
       ]);
       approved = approvedRes.rows;
       booked = bookedRes.rows;
       pending = pendingRes.rows;
       exceptions = exceptionsRes.rows;
+      invites = invitesRes.rows;
       if (meId) {
         const { rows } = await query(
           `SELECT slot_id, starts_on FROM recurring_assignments
@@ -461,6 +471,7 @@ teachersRouter.get(
     const approvedBySlot = new Map(approved.map((r) => [r.slot_id, r]));
     const bookedBySlot = new Map(booked.map((r) => [r.slot_id, r]));
     const pendingBySlot = new Map(pending.map((r) => [r.slot_id, r]));
+    const inviteBySlot = new Map(invites.map((r) => [r.slot_id, r]));
     // Exceptions are date-specific; key by slot since the grid shows one date
     // (the slot's weekday) per week.
     const exceptionBySlot = new Map(exceptions.map((e) => [e.slot_id, e.kind]));
@@ -490,6 +501,8 @@ teachersRouter.get(
       const pend = assignmentCovers(pendingBySlot.get(s.id), lessonDate)
         ? pendingBySlot.get(s.id)
         : null;
+      const invRow = inviteBySlot.get(s.id);
+      const inv = invRow && fmtDate(invRow.lesson_date) === lessonDate ? invRow : null;
       let status = 'open';
       let mine = false;
       let bookedByPartner = null;
@@ -503,6 +516,9 @@ teachersRouter.get(
           status = 'booked';
           mine = meId != null && bk.student_id === meId;
           bookedByPartner = partnerLabel(bk);
+        } else if (inv) {
+          status = 'invited';
+          mine = meId != null && inv.student_id === meId;
         }
       } else if (rec) {
         status = 'recurring';
@@ -516,6 +532,9 @@ teachersRouter.get(
         status = 'pending';
         mine = meId != null && pend.student_id === meId;
         bookedByPartner = partnerLabel(pend);
+      } else if (inv) {
+        status = 'invited';
+        mine = meId != null && inv.student_id === meId;
       }
       return {
         id: s.id,

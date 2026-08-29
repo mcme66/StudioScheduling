@@ -23,6 +23,72 @@ import {
 const DISPLAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 const SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+function weekdaySortIndex(weekday) {
+  const i = DISPLAY_ORDER.indexOf(weekday);
+  return i === -1 ? 99 : i;
+}
+
+function exceptionKind(exceptions, slotId, date) {
+  return exceptions.find((e) => e.slotId === slotId && e.date === date)?.kind || null;
+}
+
+/** Merge weekly spots and one-off bookings, ordered Monday → Sunday then by time. */
+function mergeWeekLessons(data, weekStart) {
+  const { bookings = [], recurring = [], exceptions = [] } = data || {};
+  const items = [
+    ...recurring.map((r) => {
+      const date = r.lessonDate || dateForWeekday(weekStart, r.weekday);
+      return {
+        key: `rec-${r.id}`,
+        kind: 'recurring',
+        weekday: r.weekday,
+        date,
+        startTime: r.startTime,
+        durationMin: r.durationMin,
+        exception: exceptionKind(exceptions, r.slotId, date),
+        student: r.student,
+        paymentPartner: r.paymentPartner,
+        paid: r.paid,
+        partnerPaid: r.partnerPaid,
+        source: r,
+      };
+    }),
+    ...bookings.map((b) => ({
+      key: `bk-${b.id}`,
+      kind: 'booking',
+      weekday: b.weekday,
+      date: b.lessonDate,
+      startTime: b.startTime,
+      durationMin: b.durationMin,
+      exception: null,
+      student: b.student,
+      paymentPartner: b.paymentPartner,
+      paid: b.paid,
+      partnerPaid: b.partnerPaid,
+      source: b,
+    })),
+  ];
+  items.sort((a, b) => {
+    const day = weekdaySortIndex(a.weekday) - weekdaySortIndex(b.weekday);
+    if (day) return day;
+    return a.startTime.localeCompare(b.startTime) || a.key.localeCompare(b.key);
+  });
+  return items;
+}
+
+function groupLessonsByDay(items) {
+  const groups = [];
+  for (const item of items) {
+    const last = groups[groups.length - 1];
+    if (!last || last.weekday !== item.weekday) {
+      groups.push({ weekday: item.weekday, date: item.date, items: [item] });
+    } else {
+      last.items.push(item);
+    }
+  }
+  return groups;
+}
+
 /** Child name on the lesson when present; parent contact underneath. */
 function StudentLessonInfo({ student, paymentPartner }) {
   const lessonName = student.childName || student.name;
@@ -79,6 +145,78 @@ function teacherLessonCalendarTarget(student, lessonDate, startTime, durationMin
   };
 }
 
+function LessonRow({
+  item,
+  whenLabel,
+  trackPayments,
+  onPaidChange,
+  paidPending,
+  onAddToCalendar,
+  onManage,
+  past = false,
+  upNext = false,
+}) {
+  const rowClass = ['list-row'];
+  if (past) rowClass.push('is-past');
+  if (upNext) rowClass.push('is-next');
+  return (
+    <div className={rowClass.join(' ')}>
+      <div className="when">
+        <div className="d">{whenLabel}</div>
+        <div>{fmtTimeRange(item.startTime, item.durationMin)}</div>
+      </div>
+      <StudentLessonInfo student={item.student} paymentPartner={item.paymentPartner} />
+      {item.exception === 'blocked' ? (
+        <span className="pill pill-warn">Unavailable this week</span>
+      ) : item.exception === 'skipped' ? (
+        <span className="pill pill-warn">Cancelled this week</span>
+      ) : (
+        <div className="row" style={{ gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {upNext && <span className="pill pill-taken">Up next</span>}
+          {trackPayments && item.paymentPartner && (
+            <PartnershipPaidStatus
+              bookerName={item.student.name}
+              partnerName={item.paymentPartner.name}
+              paid={item.paid === true}
+              partnerPaid={item.partnerPaid === true}
+            />
+          )}
+          {trackPayments && (
+            <PaidToggle
+              paid={
+                item.paymentPartner
+                  ? item.paid === true && item.partnerPaid === true
+                  : item.paid === true
+              }
+              disabled={paidPending}
+              onChange={onPaidChange}
+            />
+          )}
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() =>
+              onAddToCalendar(
+                teacherLessonCalendarTarget(
+                  item.student,
+                  item.date,
+                  item.startTime,
+                  item.durationMin,
+                ),
+              )
+            }
+          >
+            Calendar
+          </button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onManage}>
+            Cancel…
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const TIME_OPTIONS = (() => {
   const out = [];
   for (let h = 7; h <= 20; h++) {
@@ -114,9 +252,19 @@ export default function TeacherDashboard() {
     queryFn: () => api(`/teachers/me/bookings?week=${weekStart}`),
     refetchInterval: 20000,
   });
+  const todayBookingsQuery = useQuery({
+    queryKey: ['teacher-bookings', baseMonday],
+    queryFn: () => api(`/teachers/me/bookings?week=${baseMonday}`),
+    refetchInterval: 20000,
+  });
   const pendingQuery = useQuery({
     queryKey: ['pending'],
     queryFn: () => api('/recurring/pending'),
+    refetchInterval: 20000,
+  });
+  const invitesQuery = useQuery({
+    queryKey: ['teacher-invites', weekStart],
+    queryFn: () => api(`/invites?week=${weekStart}`),
     refetchInterval: 20000,
   });
   const myStudiosQuery = useQuery({
@@ -129,6 +277,7 @@ export default function TeacherDashboard() {
     queryClient.invalidateQueries({ queryKey: ['teacher-schedule'] });
     queryClient.invalidateQueries({ queryKey: ['teacher-bookings'] });
     queryClient.invalidateQueries({ queryKey: ['pending'] });
+    queryClient.invalidateQueries({ queryKey: ['teacher-invites'] });
   };
 
   const createSlot = useMutation({
@@ -205,16 +354,6 @@ export default function TeacherDashboard() {
     onError: (err) => toast(err.message),
   });
 
-  const dialogBusy =
-    cancelBooking.isPending ||
-    skipRecurring.isPending ||
-    removeRecurring.isPending ||
-    blockSlot.isPending ||
-    unblockSlot.isPending ||
-    createSlot.isPending ||
-    endSeries.isPending ||
-    removeSlot.isPending;
-
   const paidMutation = useMutation({
     mutationFn: ({ id, paid }) => api(`/bookings/${id}/paid`, { method: 'PATCH', body: { paid } }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['teacher-bookings'] }),
@@ -239,6 +378,55 @@ export default function TeacherDashboard() {
     onError: (err) => toast(err.message),
   });
 
+  const lookupStudent = useMutation({
+    mutationFn: (email) => api(`/invites/lookup?email=${encodeURIComponent(email)}`),
+    onError: (err) => {
+      setDialog((d) =>
+        d?.type === 'scheduleStudent'
+          ? { ...d, error: err.message, student: null, childName: '' }
+          : d,
+      );
+    },
+  });
+
+  const scheduleInvite = useMutation({
+    mutationFn: ({ slotId, lessonDate, email, childName }) =>
+      api('/invites', {
+        method: 'POST',
+        body: { slotId, lessonDate, email, childName: childName || null },
+      }),
+    onSuccess: () => {
+      toast('Scheduled. They will see it on My Lessons.');
+      invalidateAll();
+      setDialog(null);
+    },
+    onError: (err) => {
+      setDialog((d) => (d?.type === 'scheduleStudent' ? { ...d, error: err.message } : d));
+    },
+  });
+
+  const cancelInvite = useMutation({
+    mutationFn: (id) => api(`/invites/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      toast('Invite cancelled. The time is open again.');
+      invalidateAll();
+    },
+    onError: (err) => toast(err.message),
+  });
+
+  const dialogBusy =
+    cancelBooking.isPending ||
+    skipRecurring.isPending ||
+    removeRecurring.isPending ||
+    blockSlot.isPending ||
+    unblockSlot.isPending ||
+    createSlot.isPending ||
+    endSeries.isPending ||
+    removeSlot.isPending ||
+    scheduleInvite.isPending ||
+    lookupStudent.isPending ||
+    cancelInvite.isPending;
+
   const slotsByDay = useMemo(() => {
     const map = new Map(DISPLAY_ORDER.map((d) => [d, []]));
     for (const s of slotsQuery.data?.slots || []) {
@@ -249,6 +437,7 @@ export default function TeacherDashboard() {
   }, [slotsQuery.data]);
 
   const openSlots = (scheduleQuery.data?.slots || []).filter((s) => s.status === 'open');
+  const openUpcoming = openSlots.filter((s) => !isSlotPast(s.lessonDate, s.startTime));
 
   return (
     <div className="container">
@@ -321,35 +510,60 @@ export default function TeacherDashboard() {
         </div>
       )}
 
-      {/* Bookings this week */}
-      <div className="card">
-        <div className="section-title">Bookings · week of {weekRangeLabel(weekStart)}</div>
-        {bookingsQuery.isLoading && <div className="loading">Loading…</div>}
-        {bookingsQuery.data && (
-          <BookingsList
-            data={bookingsQuery.data}
-            weekStart={weekStart}
-            trackPayments={bookingsQuery.data.trackPayments}
-            onManageBooking={(b) => setDialog({ type: 'booking', booking: b })}
-            onManageRecurring={(r) => setDialog({ type: 'recurring', recurring: r })}
-            onPaidChange={(id, paid) => paidMutation.mutate({ id, paid })}
-            onRecurringPaidChange={({ id, date, paid }) =>
-              recurringPaidMutation.mutate({ id, date, paid })
-            }
-            paidPending={paidMutation.isPending || recurringPaidMutation.isPending}
-            onAddToCalendar={setCalendarTarget}
-          />
-        )}
+      <div className="dashboard-split">
+        <div className="card today-card">
+          <div className="section-title">
+            Today&apos;s Schedule ·{' '}
+            {fmtDate(todayISO(), { weekday: 'short', month: 'short', day: 'numeric' })}
+          </div>
+          {todayBookingsQuery.isLoading && <div className="loading">Loading…</div>}
+          {todayBookingsQuery.data && (
+            <TodaySchedule
+              data={todayBookingsQuery.data}
+              weekStart={baseMonday}
+              trackPayments={todayBookingsQuery.data.trackPayments}
+              onManageBooking={(b) => setDialog({ type: 'booking', booking: b })}
+              onManageRecurring={(r) =>
+                setDialog({ type: 'recurring', recurring: r, weekStart: baseMonday })
+              }
+              onPaidChange={(id, paid) => paidMutation.mutate({ id, paid })}
+              onRecurringPaidChange={({ id, date, paid }) =>
+                recurringPaidMutation.mutate({ id, date, paid })
+              }
+              paidPending={paidMutation.isPending || recurringPaidMutation.isPending}
+              onAddToCalendar={setCalendarTarget}
+            />
+          )}
+        </div>
+        <div className="card">
+          <div className="section-title">Bookings · week of {weekRangeLabel(weekStart)}</div>
+          {bookingsQuery.isLoading && <div className="loading">Loading…</div>}
+          {bookingsQuery.data && (
+            <BookingsList
+              data={bookingsQuery.data}
+              weekStart={weekStart}
+              trackPayments={bookingsQuery.data.trackPayments}
+              onManageBooking={(b) => setDialog({ type: 'booking', booking: b })}
+              onManageRecurring={(r) => setDialog({ type: 'recurring', recurring: r })}
+              onPaidChange={(id, paid) => paidMutation.mutate({ id, paid })}
+              onRecurringPaidChange={({ id, date, paid }) =>
+                recurringPaidMutation.mutate({ id, date, paid })
+              }
+              paidPending={paidMutation.isPending || recurringPaidMutation.isPending}
+              onAddToCalendar={setCalendarTarget}
+            />
+          )}
+        </div>
       </div>
 
-      {/* Slot management grid */}
-      <div className="card">
-        <div className="section-title">Lesson times</div>
-        <p className="muted" style={{ fontSize: '12px', marginTop: '-4px', marginBottom: '10px' }}>
-          Week of {weekRangeLabel(weekStart)}. Add one-time or weekly times for this week; weekly
-          series can run for a set number of weeks, until a date, or forever.
-        </p>
-        <div className="day-grid">
+      <div className="dashboard-split times-split">
+        <div className="card">
+          <div className="section-title">Lesson times</div>
+          <p className="muted" style={{ fontSize: '12px', marginTop: '-4px', marginBottom: '10px' }}>
+            Week of {weekRangeLabel(weekStart)}. Add one-time or weekly times for this week; weekly
+            series can run for a set number of weeks, until a date, or forever.
+          </p>
+          <div className="day-grid">
           {DISPLAY_ORDER.map((wd) => {
             const slots = slotsByDay.get(wd) || [];
             const used = new Set(slots.map((s) => s.startTime));
@@ -421,12 +635,36 @@ export default function TeacherDashboard() {
             );
           })}
         </div>
+        </div>
+
+        <div className="card open-times-card">
+          <div className="section-title">Open times · week of {weekRangeLabel(weekStart)}</div>
+          {scheduleQuery.isLoading && <div className="loading">Loading…</div>}
+          {scheduleQuery.data && (
+            <OpenTimesList
+              slots={openSlots}
+              pendingInvites={invitesQuery.data?.invites || []}
+              onSchedule={(slot) =>
+                setDialog({
+                  type: 'scheduleStudent',
+                  slot,
+                  email: '',
+                  error: '',
+                  student: null,
+                  childName: '',
+                })
+              }
+              onCancelInvite={(id) => cancelInvite.mutate(id)}
+              cancelPending={cancelInvite.isPending}
+            />
+          )}
+        </div>
       </div>
 
       <SharePanel
         teacherId={user.id}
         studios={myStudiosQuery.data?.studios || []}
-        openSlots={openSlots}
+        openSlots={openUpcoming}
         weekLabel={weekRangeLabel(weekStart)}
       />
 
@@ -436,7 +674,7 @@ export default function TeacherDashboard() {
           subtitle={`${WEEKDAYS[dialog.recurring.weekday]} ${fmtTimeRange(
             dialog.recurring.startTime,
             dialog.recurring.durationMin,
-          )} · week of ${weekRangeLabel(weekStart)}`}
+          )} · week of ${weekRangeLabel(dialog.weekStart || weekStart)}`}
           onClose={() => setDialog(null)}
         >
           <ModalOption
@@ -446,7 +684,7 @@ export default function TeacherDashboard() {
             onClick={() => {
               skipRecurring.mutate({
                 id: dialog.recurring.id,
-                date: dateForWeekday(weekStart, dialog.recurring.weekday),
+                date: dateForWeekday(dialog.weekStart || weekStart, dialog.recurring.weekday),
               });
               setDialog(null);
             }}
@@ -458,7 +696,7 @@ export default function TeacherDashboard() {
             onClick={() => {
               blockSlot.mutate({
                 slotId: dialog.recurring.slotId,
-                date: dateForWeekday(weekStart, dialog.recurring.weekday),
+                date: dateForWeekday(dialog.weekStart || weekStart, dialog.recurring.weekday),
               });
               setDialog(null);
             }}
@@ -556,6 +794,137 @@ export default function TeacherDashboard() {
         />
       )}
 
+      {dialog?.type === 'scheduleStudent' && (
+        <Modal
+          title="Schedule for student"
+          subtitle={`${WEEKDAYS[dialog.slot.weekday]} ${fmtTimeRange(
+            dialog.slot.startTime,
+            dialog.slot.durationMin,
+          )} · ${fmtDate(dialog.slot.lessonDate, { weekday: 'short', month: 'short', day: 'numeric' })}`}
+          onClose={() => setDialog(null)}
+        >
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const email = String(dialog.email || '').trim();
+              if (!email) {
+                setDialog((d) => ({ ...d, error: 'Enter a student email address.' }));
+                return;
+              }
+              if (!dialog.student) {
+                lookupStudent.mutate(email, {
+                  onSuccess: (data) => {
+                    const student = data.student;
+                    if (student.isParent) {
+                      const children = student.childrenNames || [];
+                      if (!children.length) {
+                        setDialog((d) =>
+                          d?.type === 'scheduleStudent'
+                            ? {
+                                ...d,
+                                student: null,
+                                childName: '',
+                                error: 'This parent has no children on their profile.',
+                              }
+                            : d,
+                        );
+                        return;
+                      }
+                      setDialog((d) =>
+                        d?.type === 'scheduleStudent'
+                          ? {
+                              ...d,
+                              student,
+                              childName: children.length === 1 ? children[0] : '',
+                              error: '',
+                            }
+                          : d,
+                      );
+                      return;
+                    }
+                    scheduleInvite.mutate({
+                      slotId: dialog.slot.id,
+                      lessonDate: dialog.slot.lessonDate,
+                      email,
+                    });
+                  },
+                });
+                return;
+              }
+              if (dialog.student.isParent && !String(dialog.childName || '').trim()) {
+                setDialog((d) => ({ ...d, error: 'Select which child this lesson is for.' }));
+                return;
+              }
+              scheduleInvite.mutate({
+                slotId: dialog.slot.id,
+                lessonDate: dialog.slot.lessonDate,
+                email,
+                childName: dialog.student.isParent ? dialog.childName : null,
+              });
+            }}
+          >
+            <div className="field">
+              <label htmlFor="schedule-student-email">Student email</label>
+              <input
+                id="schedule-student-email"
+                type="email"
+                autoComplete="off"
+                required
+                value={dialog.email}
+                onChange={(e) =>
+                  setDialog((d) => ({
+                    ...d,
+                    email: e.target.value,
+                    error: '',
+                    student: null,
+                    childName: '',
+                  }))
+                }
+              />
+            </div>
+            {dialog.student?.isParent && (
+              <>
+                <p className="muted" style={{ margin: '0 0 0.6rem', fontSize: '13px' }}>
+                  {dialog.student.name} is a parent. Choose which child this lesson is for.
+                </p>
+                <div className="field">
+                  <label htmlFor="schedule-student-child">Child</label>
+                  <select
+                    id="schedule-student-child"
+                    required
+                    value={dialog.childName}
+                    onChange={(e) =>
+                      setDialog((d) => ({ ...d, childName: e.target.value, error: '' }))
+                    }
+                  >
+                    <option value="">Select a child</option>
+                    {(dialog.student.childrenNames || []).map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            )}
+            {dialog.error && <p className="error-text">{dialog.error}</p>}
+            <button
+              type="submit"
+              className="btn btn-primary btn-block"
+              disabled={dialogBusy}
+            >
+              {lookupStudent.isPending
+                ? 'Looking up…'
+                : scheduleInvite.isPending
+                  ? 'Scheduling…'
+                  : dialog.student?.isParent
+                    ? 'Schedule lesson'
+                    : 'Continue'}
+            </button>
+          </form>
+        </Modal>
+      )}
+
       {calendarTarget && (
         <AddToCalendar
           teacherName={calendarTarget.teacherName}
@@ -574,6 +943,27 @@ export default function TeacherDashboard() {
   );
 }
 
+function lessonPaidHandler(item, weekStart, onPaidChange, onRecurringPaidChange) {
+  return (paid) => {
+    if (item.kind === 'recurring') {
+      onRecurringPaidChange({
+        id: item.source.id,
+        date: item.source.lessonDate || dateForWeekday(weekStart, item.source.weekday),
+        paid,
+      });
+    } else {
+      onPaidChange(item.source.id, paid);
+    }
+  };
+}
+
+function lessonManageHandler(item, onManageBooking, onManageRecurring) {
+  return () => {
+    if (item.kind === 'recurring') onManageRecurring(item.source);
+    else onManageBooking(item.source);
+  };
+}
+
 function BookingsList({
   data,
   weekStart,
@@ -585,133 +975,163 @@ function BookingsList({
   paidPending,
   onAddToCalendar,
 }) {
-  const { bookings, recurring, exceptions = [] } = data;
-  if (!bookings.length && !recurring.length) {
+  const items = mergeWeekLessons(data, weekStart);
+  if (!items.length) {
     return <p className="muted" style={{ fontSize: '14px' }}>No bookings for this week yet.</p>;
   }
-  const exceptionFor = (slotId, date) =>
-    exceptions.find((e) => e.slotId === slotId && e.date === date)?.kind || null;
+  const groups = groupLessonsByDay(items);
   return (
     <>
-      {recurring.map((r) => {
-        const date = dateForWeekday(weekStart, r.weekday);
-        const exception = exceptionFor(r.slotId, date);
-        return (
-          <div className="list-row" key={`rec-${r.id}`}>
-            <div className="when">
-              <div className="d">Every {WEEKDAYS[r.weekday]}</div>
-              <div>{fmtTimeRange(r.startTime, r.durationMin)}</div>
-            </div>
-            <StudentLessonInfo student={r.student} paymentPartner={r.paymentPartner} />
-            {exception === 'blocked' ? (
-              <span className="pill pill-warn">Unavailable this week</span>
-            ) : exception === 'skipped' ? (
-              <span className="pill pill-warn">Cancelled this week</span>
-            ) : (
-              <div className="row" style={{ gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                <span className="pill pill-taken">Weekly</span>
-                {trackPayments && r.paymentPartner && (
-                  <PartnershipPaidStatus
-                    bookerName={r.student.name}
-                    partnerName={r.paymentPartner.name}
-                    paid={r.paid === true}
-                    partnerPaid={r.partnerPaid === true}
-                  />
-                )}
-                {trackPayments && (
-                  <PaidToggle
-                    paid={
-                      r.paymentPartner
-                        ? r.paid === true && r.partnerPaid === true
-                        : r.paid === true
-                    }
-                    disabled={paidPending}
-                    onChange={(paid) =>
-                      onRecurringPaidChange({
-                        id: r.id,
-                        date: r.lessonDate || dateForWeekday(weekStart, r.weekday),
-                        paid,
-                      })
-                    }
-                  />
-                )}
+      {groups.map((group) => (
+        <div className="bookings-day" key={group.weekday}>
+          <div className="bookings-day-head">
+            <span className="bookings-day-date">{WEEKDAYS[group.weekday]}</span>
+            {' · '}
+            {fmtDate(group.date, { month: 'short', day: 'numeric' })}
+          </div>
+          {group.items.map((item) => (
+            <LessonRow
+              key={item.key}
+              item={item}
+              whenLabel={item.kind === 'recurring' ? 'Weekly' : 'One-time'}
+              trackPayments={trackPayments}
+              onPaidChange={lessonPaidHandler(item, weekStart, onPaidChange, onRecurringPaidChange)}
+              paidPending={paidPending}
+              onAddToCalendar={onAddToCalendar}
+              onManage={lessonManageHandler(item, onManageBooking, onManageRecurring)}
+            />
+          ))}
+        </div>
+      ))}
+    </>
+  );
+}
+
+function TodaySchedule({
+  data,
+  weekStart,
+  trackPayments,
+  onManageBooking,
+  onManageRecurring,
+  onPaidChange,
+  onRecurringPaidChange,
+  paidPending,
+  onAddToCalendar,
+}) {
+  const today = todayISO();
+  const items = mergeWeekLessons(data, weekStart).filter((item) => item.date === today);
+  if (!items.length) {
+    return <p className="muted" style={{ fontSize: '14px' }}>No lessons scheduled for today.</p>;
+  }
+  const nextKey = items.find((item) => !item.exception && !isSlotPast(item.date, item.startTime))?.key;
+  return (
+    <>
+      {items.map((item) => (
+        <LessonRow
+          key={item.key}
+          item={item}
+          whenLabel={item.kind === 'recurring' ? 'Weekly' : 'One-time'}
+          trackPayments={trackPayments}
+          onPaidChange={lessonPaidHandler(item, weekStart, onPaidChange, onRecurringPaidChange)}
+          paidPending={paidPending}
+          onAddToCalendar={onAddToCalendar}
+          onManage={lessonManageHandler(item, onManageBooking, onManageRecurring)}
+          past={!item.exception && isSlotPast(item.date, item.startTime)}
+          upNext={item.key === nextKey}
+        />
+      ))}
+    </>
+  );
+}
+
+function OpenTimesList({ slots, pendingInvites, onSchedule, onCancelInvite, cancelPending }) {
+  const groups = [];
+  const sorted = [...slots].sort(
+    (a, b) =>
+      weekdaySortIndex(a.weekday) - weekdaySortIndex(b.weekday) ||
+      a.startTime.localeCompare(b.startTime),
+  );
+  for (const slot of sorted) {
+    const last = groups[groups.length - 1];
+    if (!last || last.weekday !== slot.weekday) {
+      groups.push({ weekday: slot.weekday, date: slot.lessonDate, slots: [slot] });
+    } else {
+      last.slots.push(slot);
+    }
+  }
+
+  const waiting = [...pendingInvites].sort(
+    (a, b) =>
+      weekdaySortIndex(a.weekday) - weekdaySortIndex(b.weekday) ||
+      a.startTime.localeCompare(b.startTime) ||
+      a.lessonDate.localeCompare(b.lessonDate),
+  );
+
+  if (!groups.length && !waiting.length) {
+    return (
+      <p className="muted open-times-empty">No open times left this week.</p>
+    );
+  }
+
+  return (
+    <>
+      {waiting.length > 0 && (
+        <div className="bookings-day" style={{ marginBottom: groups.length ? '0.85rem' : 0 }}>
+          <div className="bookings-day-head">Waiting for student</div>
+          {waiting.map((inv) => (
+            <div className="open-time-row" key={inv.id}>
+              <div className="when">
+                <div className="d">
+                  {WEEKDAYS[inv.weekday]} · {fmtDate(inv.lessonDate, { month: 'short', day: 'numeric' })}
+                </div>
+                <div>{fmtTimeRange(inv.startTime, inv.durationMin)}</div>
+              </div>
+              <StudentLessonInfo student={{ ...inv.student, childName: inv.childName }} />
+              <div className="open-time-actions">
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
-                  onClick={() =>
-                    onAddToCalendar(
-                      teacherLessonCalendarTarget(
-                        r.student,
-                        r.lessonDate || date,
-                        r.startTime,
-                        r.durationMin,
-                      ),
-                    )
-                  }
+                  disabled={cancelPending}
+                  onClick={() => onCancelInvite(inv.id)}
                 >
-                  Calendar
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => onManageRecurring(r)}
-                >
-                  Cancel…
+                  Cancel
                 </button>
               </div>
-            )}
+            </div>
+          ))}
+        </div>
+      )}
+      {groups.map((group) => (
+        <div className="bookings-day" key={group.weekday}>
+          <div className="bookings-day-head">
+            <span className="bookings-day-date">{WEEKDAYS[group.weekday]}</span>
+            {' · '}
+            {fmtDate(group.date, { month: 'short', day: 'numeric' })}
           </div>
-        );
-      })}
-      {bookings.map((b) => (
-        <div className="list-row" key={b.id}>
-          <div className="when">
-            <div className="d">{fmtDate(b.lessonDate, { weekday: 'short', month: 'short', day: 'numeric' })}</div>
-            <div>{fmtTimeRange(b.startTime, b.durationMin)}</div>
-          </div>
-          <StudentLessonInfo student={b.student} paymentPartner={b.paymentPartner} />
-          <div className="row" style={{ gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            {trackPayments && b.paymentPartner && (
-              <PartnershipPaidStatus
-                bookerName={b.student.name}
-                partnerName={b.paymentPartner.name}
-                paid={b.paid === true}
-                partnerPaid={b.partnerPaid === true}
-              />
-            )}
-            {trackPayments && (
-              <PaidToggle
-                paid={
-                  b.paymentPartner ? b.paid === true && b.partnerPaid === true : b.paid
-                }
-                disabled={paidPending}
-                onChange={(paid) => onPaidChange(b.id, paid)}
-              />
-            )}
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={() =>
-                onAddToCalendar(
-                  teacherLessonCalendarTarget(
-                    b.student,
-                    b.lessonDate,
-                    b.startTime,
-                    b.durationMin,
-                  ),
-                )
-              }
-            >
-              Calendar
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={() => onManageBooking(b)}
-            >
-              Cancel…
-            </button>
-          </div>
+          {group.slots.map((slot) => {
+            const past = isSlotPast(slot.lessonDate, slot.startTime);
+            return (
+              <div className={`open-time-row${past ? ' is-past' : ''}`} key={slot.id}>
+                <div className="when">
+                  <div className="d">{slot.oneOff ? 'One-time' : 'Weekly slot'}</div>
+                  <div>{fmtTimeRange(slot.startTime, slot.durationMin)}</div>
+                </div>
+                <div className="open-time-actions">
+                  {past ? (
+                    <span className="muted">Passed</span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-green btn-sm"
+                      onClick={() => onSchedule(slot)}
+                    >
+                      Schedule for student
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       ))}
     </>

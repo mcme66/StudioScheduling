@@ -123,6 +123,10 @@ studiosRouter.get(
             SELECT 1 FROM bookings b
              WHERE b.slot_id = s.id AND b.status = 'booked' AND b.lesson_date = $4::date
           )
+          AND NOT EXISTS (
+            SELECT 1 FROM lesson_invites li
+             WHERE li.slot_id = s.id AND li.status = 'pending' AND li.lesson_date = $4::date
+          )
         ORDER BY t.full_name`,
       [studio.id, weekday, timeValue, date],
     );

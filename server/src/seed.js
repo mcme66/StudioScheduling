@@ -356,15 +356,25 @@ async function seed() {
     seriesEndDate: seriesEnd,
   });
 
-  // Allen: one-time slot later this week or next week (pick a future weekday)
-  let oneOffDate = dateForWeekday(thisMonday, 4); // Thu
-  if (oneOffDate < today) oneOffDate = dateForWeekday(nextMonday, 4);
+  // Allen: one-time Thursday this week (kept even if it already passed, so
+  // the current-week dashboard tiles are not empty after a weekend seed).
+  const thisThu = dateForWeekday(thisMonday, 4);
   const oneOffId = await ensureOneOffSlot({
     teacherId: allenId,
-    weekday: weekdayOf(oneOffDate),
+    weekday: weekdayOf(thisThu),
     startTime: '14:00',
-    oneOffDate,
+    oneOffDate: thisThu,
   });
+  let nextOneOffId = null;
+  if (thisThu < today) {
+    const nextThu = dateForWeekday(nextMonday, 4);
+    nextOneOffId = await ensureOneOffSlot({
+      teacherId: allenId,
+      weekday: weekdayOf(nextThu),
+      startTime: '14:00',
+      oneOffDate: nextThu,
+    });
+  }
 
   // Maria at Rhythm Room
   for (const [weekday, startTime] of [
@@ -387,41 +397,47 @@ async function seed() {
   const wed1600 = allenForever['3-16:00'];
   const fri1500 = allenForever['5-15:00'];
 
-  // Jane holds Friday 3pm as an approved weekly spot
+  // Jane holds Friday 3pm as an approved weekly spot starting this week,
+  // even if Friday has already passed (so Bookings for this week is filled).
   if (fri1500) {
-    let friLesson = dateForWeekday(thisMonday, 5);
-    if (friLesson < today) friLesson = dateForWeekday(nextMonday, 5);
     await ensureRecurring({
       slotId: fri1500,
       studentId: janeId,
       status: 'approved',
-      startsOn: friLesson,
+      startsOn: dateForWeekday(thisMonday, 5),
     });
   }
 
-  // Parent books Alina into next week's Monday 4pm (one-off booking on forever slot)
-  const nextMonLesson = dateForWeekday(nextMonday, 1);
-  if (mon1600 && nextMonLesson >= today) {
+  // Parent books Alina into this week's Monday 4pm and next week's as well.
+  if (mon1600) {
     await ensureBooking({
       slotId: mon1600,
       studentId: parentId,
-      lessonDate: nextMonLesson,
+      lessonDate: dateForWeekday(thisMonday, 1),
       childName: 'Alina Metler',
       paymentPartnerId: janeId,
     });
+    const nextMonLesson = dateForWeekday(nextMonday, 1);
+    if (nextMonLesson >= today) {
+      await ensureBooking({
+        slotId: mon1600,
+        studentId: parentId,
+        lessonDate: nextMonLesson,
+        childName: 'Alina Metler',
+        paymentPartnerId: janeId,
+      });
+    }
   }
 
-  // Alex has a pending weekly request on Wednesday 4pm
+  // Alex has a pending weekly request on Wednesday 4pm, plus this week's lesson.
   if (wed1600) {
-    let wedLesson = dateForWeekday(thisMonday, 3);
-    if (wedLesson < today) wedLesson = dateForWeekday(nextMonday, 3);
+    const wedLesson = dateForWeekday(thisMonday, 3);
     await ensureRecurring({
       slotId: wed1600,
       studentId: alexId,
       status: 'pending',
       startsOn: wedLesson,
     });
-    // Also book Alex's first lesson this/next Wed if still open
     await ensureBooking({
       slotId: wed1600,
       studentId: alexId,
@@ -429,12 +445,19 @@ async function seed() {
     });
   }
 
-  // One-off temporary slot booking for Jane
-  if (oneOffId && oneOffDate >= today) {
+  // One-off Thursday booking for Jane (this week, and next week if Thursday passed).
+  if (oneOffId) {
     await ensureBooking({
       slotId: oneOffId,
       studentId: janeId,
-      lessonDate: oneOffDate,
+      lessonDate: thisThu,
+    });
+  }
+  if (nextOneOffId) {
+    await ensureBooking({
+      slotId: nextOneOffId,
+      studentId: janeId,
+      lessonDate: dateForWeekday(nextMonday, 4),
     });
   }
 

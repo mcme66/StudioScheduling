@@ -251,6 +251,7 @@ export default function InstructorSchedule() {
     if (slot.status === 'recurring') return 'Weekly · reserved';
     if (slot.status === 'booked') return 'Booked';
     if (slot.status === 'pending') return 'Pending';
+    if (slot.status === 'invited') return slot.mine ? 'Scheduled for you' : 'Held';
     if (slot.status === 'unavailable') return 'Unavailable';
     return '';
   };

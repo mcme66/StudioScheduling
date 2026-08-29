@@ -4,17 +4,15 @@ import { query, withTransaction } from '../db.js';
 import { asyncHandler, HttpError } from '../middleware/error.js';
 import { requireAuth } from '../middleware/auth.js';
 import {
-  weekdayOf,
   isValidDateStr,
   todayISO,
-  isLessonPast,
-  isDateInSeries,
   recurringCoversDate,
   nextWeekdayOnOrAfter,
 } from '../utils/week.js';
 import { sendBookingConfirmation } from '../services/email.js';
 import { normalizeChildrenNames } from './students.js';
 import { resolveBookerStudentId } from '../utils/booker.js';
+import { loadSlotForUpdate, assertSlotOpenOnDate } from '../utils/assertSlotOpen.js';
 import {
   partnerLinksFor,
   partnerCoversLesson,
@@ -97,93 +95,14 @@ bookingsRouter.post(
         childName,
       );
 
-      const { rows: slotRows } = await client.query(
-        'SELECT * FROM slots WHERE id = $1 FOR UPDATE',
-        [slotId],
-      );
-      const slot = slotRows[0];
-      if (!slot || !slot.active) throw new HttpError(404, 'That lesson time is not available.');
+      const slot = await loadSlotForUpdate(client, slotId);
 
       // Teachers-as-students may only book other instructors.
       if (req.user.role === 'teacher' && slot.teacher_id === req.user.id) {
         throw new HttpError(400, 'You cannot book a lesson on your own schedule.');
       }
 
-      if (isLessonPast(lessonDate, slot.start_time)) {
-        throw new HttpError(400, 'That lesson time has already passed.');
-      }
-
-      if (weekdayOf(lessonDate) !== slot.weekday) {
-        throw new HttpError(400, 'That date does not match the lesson day.');
-      }
-
-      // A one-off ("this week only") slot can only be booked on its date.
-      if (slot.one_off_date && fmtDate(slot.one_off_date) !== lessonDate) {
-        throw new HttpError(404, 'That lesson time is not available.');
-      }
-
-      // Weekly series bounds.
-      if (
-        !slot.one_off_date &&
-        !isDateInSeries(
-          lessonDate,
-          slot.series_start_date ? fmtDate(slot.series_start_date) : null,
-          slot.series_end_date ? fmtDate(slot.series_end_date) : null,
-        )
-      ) {
-        throw new HttpError(404, 'That lesson time is not available.');
-      }
-
-      const { rows: excRows } = await client.query(
-        'SELECT kind FROM slot_exceptions WHERE slot_id = $1 AND exception_date = $2',
-        [slotId, lessonDate],
-      );
-      const exception = excRows[0];
-      if (exception?.kind === 'blocked') {
-        throw new HttpError(409, 'That time is unavailable that week.');
-      }
-      const skippedThisWeek = exception?.kind === 'skipped';
-
-      const { rows: recRows } = await client.query(
-        `SELECT student_id, starts_on FROM recurring_assignments
-          WHERE slot_id = $1 AND status = 'approved'`,
-        [slotId],
-      );
-      // A skipped week reopens the slot for anyone, so the weekly holder does
-      // not block bookings on that specific date. Weeks before the weekly
-      // assignment starts stay open for one-off bookings.
-      const recCovers =
-        recRows[0] &&
-        recurringCoversDate(
-          lessonDate,
-          recRows[0].starts_on ? fmtDate(recRows[0].starts_on) : null,
-          slot.series_start_date ? fmtDate(slot.series_start_date) : null,
-          slot.series_end_date ? fmtDate(slot.series_end_date) : null,
-        );
-      if (recCovers && !skippedThisWeek) {
-        if (recRows[0].student_id === bookerStudentId) {
-          throw new HttpError(409, 'You already hold this time as a weekly spot.');
-        }
-        throw new HttpError(409, 'This time is reserved for a weekly student.');
-      }
-
-      const { rows: pendingRows } = await client.query(
-        `SELECT student_id, starts_on FROM recurring_assignments
-          WHERE slot_id = $1 AND status = 'pending'`,
-        [slotId],
-      );
-      const pendingCovers =
-        pendingRows[0] &&
-        pendingRows[0].student_id !== bookerStudentId &&
-        recurringCoversDate(
-          lessonDate,
-          pendingRows[0].starts_on ? fmtDate(pendingRows[0].starts_on) : null,
-          slot.series_start_date ? fmtDate(slot.series_start_date) : null,
-          slot.series_end_date ? fmtDate(slot.series_end_date) : null,
-        );
-      if (pendingCovers) {
-        throw new HttpError(409, 'This time has a pending weekly spot request.');
-      }
+      await assertSlotOpenOnDate(client, slot, lessonDate, { bookerStudentId });
 
       const { rows } = await client.query(
         `INSERT INTO bookings (slot_id, student_id, lesson_date, child_name, payment_partner_id)

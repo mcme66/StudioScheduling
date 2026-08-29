@@ -175,6 +175,126 @@ a:hover {
   margin-top: 1.25rem;
 }
 
+/* Teacher dashboard: Today's Schedule + Bookings sit side by side and
+   break out of the 960px page column, with a slim side buffer. */
+.dashboard-split {
+  width: min(1760px, calc(100vw - 3rem));
+  margin-left: calc(50% - min(1760px, calc(100vw - 3rem)) / 2);
+  margin-bottom: 1.25rem;
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+.card + .dashboard-split {
+  margin-top: 1.25rem;
+}
+.dashboard-split > .card,
+.dashboard-split > .card + .card {
+  margin-top: 0;
+  min-width: 0;
+}
+.dashboard-split .list-row {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.dashboard-split .list-row .when {
+  min-width: 108px;
+}
+.dashboard-split .list-row .grow {
+  flex: 1 1 140px;
+}
+.dashboard-split .list-row > .row,
+.dashboard-split .list-row > .pill {
+  margin-left: auto;
+}
+.dashboard-split .list-row.is-past {
+  opacity: 0.55;
+}
+.dashboard-split .list-row.is-next {
+  background: var(--green-light);
+  border-radius: 8px;
+  margin: 0 -8px;
+  padding-left: 8px;
+  padding-right: 8px;
+  border-bottom-color: transparent;
+}
+.bookings-day + .bookings-day {
+  margin-top: 0.7rem;
+}
+.bookings-day-head {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  padding: 0.2rem 0 0.35rem;
+  border-bottom: 1px solid var(--cream);
+  margin-bottom: 0.1rem;
+}
+.bookings-day-head .bookings-day-date {
+  font-weight: 500;
+  color: var(--ink);
+  letter-spacing: 0.04em;
+}
+@media (min-width: 901px) {
+  .dashboard-split .today-card {
+    position: sticky;
+    top: 1rem;
+  }
+}
+@media (max-width: 900px) {
+  .dashboard-split {
+    width: auto;
+    margin-left: 0;
+    grid-template-columns: 1fr;
+  }
+}
+
+.times-split {
+  grid-template-columns: minmax(0, 1.22fr) minmax(0, 0.78fr);
+}
+@media (min-width: 1025px) {
+  .times-split .open-times-card {
+    position: sticky;
+    top: 1rem;
+    max-height: calc(100vh - 2rem);
+    overflow: auto;
+  }
+}
+@media (max-width: 1024px) {
+  .times-split {
+    width: auto;
+    margin-left: 0;
+    grid-template-columns: 1fr;
+  }
+}
+
+.open-time-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--cream);
+  font-size: 14px;
+}
+.open-time-row:last-child {
+  border-bottom: none;
+}
+.open-time-row .when {
+  min-width: 108px;
+}
+.open-time-row .open-time-actions {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.open-times-empty {
+  font-size: 14px;
+}
+.open-time-row.is-past {
+  opacity: 0.55;
+}
+
 .section-title {
   font-size: 12px;
   font-weight: 600;

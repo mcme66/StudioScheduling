@@ -39,8 +39,17 @@ export default function MyLessons() {
     queryFn: () => api('/bookings/me'),
     refetchInterval: 20000,
   });
+  const invitesQuery = useQuery({
+    queryKey: ['my-invites'],
+    queryFn: () => api('/invites/me'),
+    refetchInterval: 20000,
+  });
+  const [inviteChild, setInviteChild] = useState({});
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['my-lessons'] });
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['my-lessons'] });
+    queryClient.invalidateQueries({ queryKey: ['my-invites'] });
+  };
 
   const cancelMutation = useMutation({
     mutationFn: (id) => api(`/bookings/${id}`, { method: 'DELETE' }),
@@ -64,6 +73,25 @@ export default function MyLessons() {
     mutationFn: (id) => api(`/recurring/${id}`, { method: 'DELETE' }),
     onSuccess: () => {
       toast('Removed from the weekly slot.');
+      invalidate();
+    },
+    onError: (err) => toast(err.message),
+  });
+
+  const acceptInvite = useMutation({
+    mutationFn: ({ id, childName }) =>
+      api(`/invites/${id}/accept`, { method: 'POST', body: { childName: childName || null } }),
+    onSuccess: () => {
+      toast('Lesson added to your schedule.');
+      invalidate();
+    },
+    onError: (err) => toast(err.message),
+  });
+
+  const declineInvite = useMutation({
+    mutationFn: (id) => api(`/invites/${id}/decline`, { method: 'POST' }),
+    onSuccess: () => {
+      toast('Scheduled lesson declined.');
       invalidate();
     },
     onError: (err) => toast(err.message),
@@ -102,6 +130,85 @@ export default function MyLessons() {
 
       {data && (
         <>
+          {invitesQuery.data?.invites?.length > 0 && (
+            <div className="card" style={{ borderColor: '#f0c090', borderWidth: 2 }}>
+              <div className="section-title">⏳ Lesson scheduled for you</div>
+              {invitesQuery.data.invites.map((inv) => {
+                const isParent = invitesQuery.data.isParent === true;
+                const children = invitesQuery.data.childrenNames || [];
+                const teacherChoseChild = Boolean(inv.childName);
+                const chosen =
+                  inv.childName ||
+                  inviteChild[inv.id] ||
+                  (children.length === 1 ? children[0] : '');
+                return (
+                  <div className="list-row" key={inv.id}>
+                    <div className="when">
+                      <div className="d">{WEEKDAYS[inv.weekday]}</div>
+                      <div>
+                        {fmtTimeRange(inv.startTime, inv.durationMin)}
+                        <div className="muted" style={{ fontSize: '11px', marginTop: '2px' }}>
+                          {fmtDate(inv.lessonDate, { month: 'short', day: 'numeric' })}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="grow">
+                      {teacherChoseChild
+                        ? `${inv.teacher.name} scheduled this for ${inv.childName}.`
+                        : `Accept the spot that ${inv.teacher.name} scheduled for you.`}
+                      {isParent && children.length > 1 && !teacherChoseChild && (
+                        <div className="field" style={{ margin: '0.45rem 0 0' }}>
+                          <label htmlFor={`invite-child-${inv.id}`}>Which child?</label>
+                          <select
+                            id={`invite-child-${inv.id}`}
+                            value={inviteChild[inv.id] ?? (children.length === 1 ? children[0] : '')}
+                            onChange={(e) =>
+                              setInviteChild((prev) => ({ ...prev, [inv.id]: e.target.value }))
+                            }
+                          >
+                            <option value="">Select a child</option>
+                            {children.map((name) => (
+                              <option key={name} value={name}>
+                                {name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+                    <div className="row" style={{ gap: '0.4rem' }}>
+                      <button
+                        type="button"
+                        className="btn btn-green btn-sm"
+                        disabled={acceptInvite.isPending || declineInvite.isPending}
+                        onClick={() => {
+                          if (isParent && children.length > 1 && !teacherChoseChild && !chosen) {
+                            toast('Select which child this lesson is for.');
+                            return;
+                          }
+                          acceptInvite.mutate({
+                            id: inv.id,
+                            childName: isParent ? chosen || children[0] : null,
+                          });
+                        }}
+                      >
+                        Accept
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        disabled={acceptInvite.isPending || declineInvite.isPending}
+                        onClick={() => declineInvite.mutate(inv.id)}
+                      >
+                        Decline
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {weeklySpots.length > 0 && (
             <div className="card">
               <div className="section-title">Weekly spots</div>

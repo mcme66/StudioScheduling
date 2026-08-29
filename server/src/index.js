@@ -12,6 +12,7 @@ import { bookingsRouter } from './routes/bookings.js';
 import { recurringRouter } from './routes/recurring.js';
 import { studiosRouter } from './routes/studios.js';
 import { studentsRouter } from './routes/students.js';
+import { invitesRouter } from './routes/invites.js';
 import { startReminderJob } from './services/reminders.js';
 import { startTeacherDailyScheduleJob } from './services/teacherDailySchedule.js';
 
@@ -43,6 +44,7 @@ app.use('/api/slots', slotsRouter);
 app.use('/api/bookings', bookingsRouter);
 app.use('/api/recurring', recurringRouter);
 app.use('/api/students', studentsRouter);
+app.use('/api/invites', invitesRouter);
 
 app.use(notFound);
 app.use(errorHandler);
