@@ -13,6 +13,7 @@ import ResetPassword from './pages/ResetPassword.jsx';
 import TeacherRegister from './pages/TeacherRegister.jsx';
 import StudentRegister from './pages/StudentRegister.jsx';
 import Profile from './pages/Profile.jsx';
+import Bella from './pages/Bella.jsx';
 
 export default function App() {
   return (
@@ -57,6 +58,9 @@ export default function App() {
             </RequireAuth>
           }
         />
+
+        <Route path="/Bella" element={<Bella />} />
+        <Route path="/bella" element={<Navigate to="/Bella" replace />} />
 
         {/* Legacy redirects */}
         <Route path="/login" element={<Navigate to="/student/login" replace />} />
