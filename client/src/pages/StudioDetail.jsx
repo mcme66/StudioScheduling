@@ -9,6 +9,7 @@ import {
   fmtTime,
   fmtTimeRange,
 } from '../lib/format.js';
+import StudioRoomsSchedule from '../components/StudioRoomsSchedule.jsx';
 
 const TIME_OPTIONS = (() => {
   const out = [];
@@ -59,6 +60,14 @@ export default function StudioDetail() {
             {data.studio.name}
           </h1>
           {data.studio.description && <p className="page-sub">{data.studio.description}</p>}
+
+          {(data.rooms?.length > 0 || data.classSchedules?.length > 0) && (
+            <StudioRoomsSchedule
+              rooms={data.rooms || []}
+              classes={data.classSchedules || []}
+              scheduleDescription="Weekly group classes at this studio. Private lessons are booked with an instructor below."
+            />
+          )}
 
           {data.teachers.length > 0 && (
             <details className="card studio-search">

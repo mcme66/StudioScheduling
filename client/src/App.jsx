@@ -13,7 +13,9 @@ import ResetPassword from './pages/ResetPassword.jsx';
 import TeacherRegister from './pages/TeacherRegister.jsx';
 import StudentRegister from './pages/StudentRegister.jsx';
 import Profile from './pages/Profile.jsx';
-import Bella from './pages/Bella.jsx';
+import OwnerDashboard from './pages/OwnerDashboard.jsx';
+import OwnerCoachLessons from './pages/OwnerCoachLessons.jsx';
+import OwnerRegister from './pages/OwnerRegister.jsx';
 
 export default function App() {
   return (
@@ -25,6 +27,7 @@ export default function App() {
 
         <Route path="/teacher/login" element={<TeacherLogin />} />
         <Route path="/teacher/register" element={<TeacherRegister />} />
+        <Route path="/teacher/owner-register" element={<OwnerRegister />} />
         <Route path="/teacher/forgot-password" element={<ForgotPassword />} />
         <Route path="/teacher/reset-password" element={<ResetPassword />} />
         <Route path="/student/login" element={<StudentLogin />} />
@@ -51,6 +54,23 @@ export default function App() {
         />
 
         <Route
+          path="/owner"
+          element={
+            <RequireAuth role="studio_owner">
+              <OwnerDashboard />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/owner/coaches/:teacherId"
+          element={
+            <RequireAuth role="studio_owner">
+              <OwnerCoachLessons />
+            </RequireAuth>
+          }
+        />
+
+        <Route
           path="/profile"
           element={
             <RequireAuth>
@@ -58,9 +78,6 @@ export default function App() {
             </RequireAuth>
           }
         />
-
-        <Route path="/Bella" element={<Bella />} />
-        <Route path="/bella" element={<Navigate to="/Bella" replace />} />
 
         {/* Legacy redirects */}
         <Route path="/login" element={<Navigate to="/student/login" replace />} />

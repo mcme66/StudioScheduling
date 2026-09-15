@@ -1,7 +1,17 @@
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.jsx';
 
-const LOGIN_PATH = { student: '/student/login', teacher: '/teacher/login' };
+const LOGIN_PATH = {
+  student: '/student/login',
+  teacher: '/teacher/login',
+  studio_owner: '/teacher/login',
+};
+
+function homeForRole(role) {
+  if (role === 'teacher') return '/teacher';
+  if (role === 'studio_owner') return '/owner';
+  return '/';
+}
 
 export default function RequireAuth({ role, children }) {
   const { user, loading } = useAuth();
@@ -17,7 +27,7 @@ export default function RequireAuth({ role, children }) {
   const teacherBookerOk =
     role === 'student' && user.role === 'teacher' && user.canBookAsStudent === true;
   if (role && user.role !== role && !teacherBookerOk) {
-    return <Navigate to={user.role === 'teacher' ? '/teacher' : '/'} replace />;
+    return <Navigate to={homeForRole(user.role)} replace />;
   }
   return children;
 }

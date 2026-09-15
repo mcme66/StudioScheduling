@@ -16,6 +16,21 @@ export function fmtTime(t) {
   return m === 0 ? `${h12} ${ampm}` : `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
 }
 
+export function toTwelveHour(hhmm) {
+  const [h, m] = (hhmm || '16:00').split(':').map(Number);
+  return {
+    hour: String(h % 12 || 12),
+    minute: String(m).padStart(2, '0'),
+    period: h >= 12 ? 'PM' : 'AM',
+  };
+}
+
+export function fromTwelveHour(hour, minute, period) {
+  let h = Number(hour) % 12;
+  if (period === 'PM') h += 12;
+  return `${String(h).padStart(2, '0')}:${String(Number(minute)).padStart(2, '0')}`;
+}
+
 export function addMinsToTime(t, mins) {
   const [h, m] = t.split(':').map(Number);
   const total = h * 60 + m + mins;
@@ -71,6 +86,44 @@ export function getMonday(dateStr) {
 
 export function addWeeks(mondayStr, weeks) {
   return iso(new Date(parse(mondayStr).getTime() + weeks * 7 * DAY_MS));
+}
+
+export function weekEndSunday(mondayStr) {
+  return dateForWeekday(mondayStr, 0);
+}
+
+export function weekSpanLabel(mondayStr) {
+  const monday = parse(mondayStr);
+  const sunday = parse(weekEndSunday(mondayStr));
+  const f = (d) =>
+    d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  return `${f(monday)} – ${f(sunday)}`;
+}
+
+export function monthStart(dateStr) {
+  const d = parse(dateStr);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-01`;
+}
+
+export function addMonths(monthStartStr, delta) {
+  const d = parse(monthStartStr);
+  const total = d.getUTCFullYear() * 12 + d.getUTCMonth() + delta;
+  const y = Math.floor(total / 12);
+  const m = total % 12;
+  return `${y}-${String(m + 1).padStart(2, '0')}-01`;
+}
+
+export function monthEnd(monthStartStr) {
+  const next = addMonths(monthStartStr, 1);
+  return iso(new Date(parse(next).getTime() - DAY_MS));
+}
+
+export function monthLabel(monthStartStr) {
+  return parse(monthStartStr).toLocaleDateString('en-US', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
 }
 
 export function weekRangeLabel(mondayStr) {

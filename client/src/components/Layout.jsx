@@ -29,6 +29,15 @@ export default function Layout() {
                 {user.fullName}
               </Link>
             </>
+          ) : user?.role === 'studio_owner' ? (
+            <>
+              <NavLink to="/owner" className="header-nav-pill">
+                Studio
+              </NavLink>
+              <Link to="/profile" className="header-nav-pill">
+                {user.fullName}
+              </Link>
+            </>
           ) : user?.role === 'student' ? (
             <>
               <NavLink to="/my-lessons" className="header-nav-pill">

@@ -14,7 +14,7 @@ export default function ResetPassword() {
   const navigate = useNavigate();
   const role = roleFromPath(pathname);
   const loginPath = role === 'teacher' ? '/teacher/login' : '/student/login';
-  const roleLabel = role === 'teacher' ? 'Teacher' : 'Student';
+  const roleLabel = role === 'teacher' ? 'Teacher or studio owner' : 'Student';
   const btnClass = role === 'teacher' ? 'btn btn-primary btn-block' : 'btn btn-green btn-block';
   const token = searchParams.get('token') || '';
 

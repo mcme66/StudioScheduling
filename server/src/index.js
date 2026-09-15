@@ -13,7 +13,7 @@ import { recurringRouter } from './routes/recurring.js';
 import { studiosRouter } from './routes/studios.js';
 import { studentsRouter } from './routes/students.js';
 import { invitesRouter } from './routes/invites.js';
-import { bellaRouter } from './routes/bella.js';
+import { ownerRouter } from './routes/owner.js';
 import { startReminderJob } from './services/reminders.js';
 import { startTeacherDailyScheduleJob } from './services/teacherDailySchedule.js';
 
@@ -46,7 +46,7 @@ app.use('/api/bookings', bookingsRouter);
 app.use('/api/recurring', recurringRouter);
 app.use('/api/students', studentsRouter);
 app.use('/api/invites', invitesRouter);
-app.use('/api/bella', bellaRouter);
+app.use('/api/owner', ownerRouter);
 
 app.use(notFound);
 app.use(errorHandler);

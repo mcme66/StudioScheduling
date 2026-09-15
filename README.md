@@ -4,8 +4,10 @@ A self-hosted lesson booking app on the PERN stack (PostgreSQL, Express, React, 
 
 ## Features
 
-- **Studios** — public homepage lists studios; each studio shows its instructors.
-- Separate **teacher** and **student** accounts (login / register / forgot password).
+- **Studios** — public homepage lists studios; each studio shows its rooms, class timetable, and instructors.
+- Separate **teacher**, **student**, and **studio owner** accounts. Owners sign in from the teacher login page.
+- Studio owners publish **rooms** and a weekly **class schedule** (view-only for students and teachers).
+- Studio owners can review **coach lesson lists** and **expected floor fees** (higher of a percent of lesson price or a flat fee) by week or month.
 - Students book a slot for a specific week (up to 2 weeks ahead), cancel their own lessons, and manage upcoming + past bookings.
 - **Weekly spots** — students request a recurring time; teachers approve or decline.
 - **Parent accounts** — a student can mark themselves as a parent, list children, and book under a child’s name (contact stays on the parent account).
@@ -39,12 +41,14 @@ server/.env.example  Local API env — copy to server/.env
 | Path | Access | Purpose |
 |------|--------|---------|
 | `/` | Public | Browse studios |
-| `/studios/:slug` | Public | Instructors at a studio |
+| `/studios/:slug` | Public | Rooms, class timetable, and instructors at a studio |
 | `/studios/:slug/book/:teacherId` | Public to view; login to book | Instructor schedule |
 | `/student/login`, `/student/register` | Public | Student auth |
-| `/teacher/login`, `/teacher/register` | Public | Teacher auth |
+| `/teacher/login`, `/teacher/register` | Public | Teacher auth (owners also log in here) |
 | `/my-lessons` | Student (or teacher with “Student as well?”) | Bookings & weekly spots |
-| `/teacher` | Teacher | Dashboard: slots, bookings, weekly requests |
+| `/teacher` | Teacher | Dashboard: slots, bookings, weekly requests, studio class timetable |
+| `/owner` | Studio owner | Rooms, class schedule, studio details, coaches |
+| `/owner/coaches/:teacherId` | Studio owner | Lessons a coach taught in a chosen week or month |
 | `/profile` | Signed-in user | Profile, parent toggle, teacher settings |
 
 ## Quick start (Docker Compose)
@@ -77,6 +81,14 @@ All demo passwords are **`password123`**. Re-running `npm run seed` is safe (ups
 | Island Style Dance Studio | `/studios/island-style-dance-studio` |
 | Rhythm Room | `/studios/rhythm-room` |
 
+### Studio owners
+
+Log in at `/teacher/login`. Each studio has at most one owner.
+
+| Email | Name | Studio | Notes |
+|-------|------|--------|--------|
+| `owner@example.com` | Leilani | Island Style | Password **`password123`**. Manages rooms and the published class timetable. Rhythm Room has no owner. |
+
 ### Teachers
 
 | Email | Name | Studio | Notes |
@@ -99,6 +111,7 @@ All demo passwords are **`password123`**. Re-running `npm run seed` is safe (ups
 - A finite **6-week Wednesday 6pm** series for Allen
 - A **one-time Thursday** afternoon slot for Allen
 - Parent child bookings, an approved weekly holder, and a pending weekly request so dashboards aren’t empty
+- Island Style **rooms** (Main Floor, Small Studio) and sample **weekly classes**
 
 ## Environment variables
 
@@ -202,6 +215,8 @@ Vite proxies `/api` to the API so auth cookies work on one origin. `Ctrl+C` stop
 ## Database overview
 
 - `studios` — locations (`name`, `slug`, `description`)
+- `studio_owners` — one owner per studio (`studio_id` unique); owners log in from the teacher login page
+- `rooms` / `class_schedules` — studio-published rooms and weekly group-class timetable (view-only)
 - `teacher_studios` — teacher ↔ studio (one studio at a time in the UI)
 - `teachers` / `students` — accounts; teachers may set `can_book_as_student` and link to a student row by email for booking FKs
 - `students.is_parent` / `children_names` — parent booking

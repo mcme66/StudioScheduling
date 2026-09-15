@@ -10,13 +10,23 @@ import { allocatePartnerCode, orderedPair, syncChildPartnerCodes } from './utils
  * Note: weekly slots no longer have a DB unique on (teacher, weekday, start_time)
  * (series can succeed one another), so inserts use NOT EXISTS instead of ON CONFLICT.
  */
-async function upsertStudio({ name, slug, description }) {
+async function upsertStudio({
+  name,
+  slug,
+  description,
+  floorFeePercent = null,
+  floorFeeFlatCents = null,
+}) {
   const { rows } = await query(
-    `INSERT INTO studios (name, slug, description)
-     VALUES ($1, $2, $3)
-     ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description
+    `INSERT INTO studios (name, slug, description, floor_fee_percent, floor_fee_flat_cents)
+     VALUES ($1, $2, $3, COALESCE($4, 0), COALESCE($5, 0))
+     ON CONFLICT (slug) DO UPDATE SET
+       name = EXCLUDED.name,
+       description = EXCLUDED.description,
+       floor_fee_percent = COALESCE($4, studios.floor_fee_percent),
+       floor_fee_flat_cents = COALESCE($5, studios.floor_fee_flat_cents)
      RETURNING id`,
-    [name, slug, description],
+    [name, slug, description, floorFeePercent, floorFeeFlatCents],
   );
   return rows[0].id;
 }
@@ -95,6 +105,62 @@ async function linkTeacherStudio(teacherId, studioId) {
      ON CONFLICT DO NOTHING`,
     [teacherId, studioId],
   );
+}
+
+async function upsertStudioOwner({ email, passwordHash, fullName, phone, studioId }) {
+  const { rows } = await query(
+    `INSERT INTO studio_owners (email, password_hash, full_name, phone, studio_id)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (email) DO UPDATE SET
+       password_hash = EXCLUDED.password_hash,
+       full_name = EXCLUDED.full_name,
+       phone = EXCLUDED.phone,
+       studio_id = EXCLUDED.studio_id
+     RETURNING id`,
+    [email, passwordHash, fullName, phone, studioId],
+  );
+  return rows[0].id;
+}
+
+async function upsertRoom({ studioId, name, description = null }) {
+  const { rows } = await query(
+    `INSERT INTO rooms (studio_id, name, description)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (studio_id, name) DO UPDATE SET description = EXCLUDED.description
+     RETURNING id`,
+    [studioId, name, description],
+  );
+  return rows[0].id;
+}
+
+async function ensureClassSchedule({
+  studioId,
+  name,
+  weekdays,
+  startTime,
+  durationMin,
+  roomId = null,
+  teacherId = null,
+  description = null,
+}) {
+  const days = [...new Set(weekdays)].sort((a, b) => a - b);
+  const { rows: existing } = await query(
+    `SELECT id FROM class_schedules
+      WHERE studio_id = $1 AND name = $2 AND weekdays = $3::smallint[] AND start_time = $4::time
+      LIMIT 1`,
+    [studioId, name, days, startTime],
+  );
+  if (existing[0]) return existing[0].id;
+
+  const { rows } = await query(
+    `INSERT INTO class_schedules (
+       studio_id, room_id, teacher_id, name, weekdays, start_time, duration_min, description
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id`,
+    [studioId, roomId, teacherId, name, days, startTime, durationMin, description],
+  );
+  return rows[0].id;
 }
 
 /** Ensure a weekly (non one-off) slot exists; returns its id. */
@@ -249,6 +315,8 @@ async function seed() {
     slug: 'island-style-dance-studio',
     description:
       'Private dance lessons in a welcoming island-style studio. Book one-off sessions or request a weekly spot.',
+    floorFeePercent: 20,
+    floorFeeFlatCents: 1000,
   });
   const rhythmId = await upsertStudio({
     name: 'Rhythm Room',
@@ -288,6 +356,53 @@ async function seed() {
   await linkTeacherStudio(allenId, islandId);
   await linkTeacherStudio(mariaId, rhythmId);
   await linkTeacherStudio(inactiveId, islandId);
+
+  await upsertStudioOwner({
+    email: 'owner@example.com',
+    passwordHash,
+    fullName: 'Leilani',
+    phone: '555-0300',
+    studioId: islandId,
+  });
+
+  const mainFloorId = await upsertRoom({
+    studioId: islandId,
+    name: 'Main Floor',
+    description: 'Large mirrored studio with sprung floor.',
+  });
+  const smallStudioId = await upsertRoom({
+    studioId: islandId,
+    name: 'Small Studio',
+    description: 'Intimate space for technique and small groups.',
+  });
+
+  await ensureClassSchedule({
+    studioId: islandId,
+    name: 'Island Style Beginner',
+    weekdays: [1],
+    startTime: '16:00',
+    durationMin: 60,
+    roomId: mainFloorId,
+    teacherId: allenId,
+    description: 'Introductory island-style class.',
+  });
+  await ensureClassSchedule({
+    studioId: islandId,
+    name: 'Technique',
+    weekdays: [3],
+    startTime: '17:00',
+    durationMin: 45,
+    roomId: smallStudioId,
+    teacherId: allenId,
+  });
+  await ensureClassSchedule({
+    studioId: islandId,
+    name: 'Open Practice',
+    weekdays: [6],
+    startTime: '10:00',
+    durationMin: 60,
+    roomId: mainFloorId,
+  });
 
   const janeId = await upsertStudent({
     email: 'student@example.com',
@@ -475,6 +590,8 @@ async function seed() {
   console.log('Studios');
   console.log('  • Island Style Dance Studio  /studios/island-style-dance-studio');
   console.log('  • Rhythm Room               /studios/rhythm-room');
+  console.log('\nStudio owners (password: password123) — log in at /teacher/login');
+  console.log('  • owner@example.com   Leilani        Island Style');
   console.log('\nTeachers (password: password123)');
   console.log('  • allen@example.com   Allen          Island Style (payments on)');
   console.log('  • maria@example.com   Maria Chen     Rhythm Room');
@@ -484,7 +601,7 @@ async function seed() {
   console.log('  • parent@example.com   Sam Metler     parent (Alina, Ian); Jane shares Alina');
   console.log('  • alex@example.com     Alex Rivera    pending weekly Wed 4pm');
   console.log('\nAlso seeded: forever slots, a 6-week Wed 6pm series, a one-time Thu slot,');
-  console.log('parent child bookings, and a pending weekly request for the teacher dashboard.');
+  console.log('parent child bookings, a pending weekly request, and Island Style rooms + classes.');
 }
 
 seed()

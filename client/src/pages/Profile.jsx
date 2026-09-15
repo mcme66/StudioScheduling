@@ -12,6 +12,8 @@ export default function Profile() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const isTeacher = user?.role === 'teacher';
+  const isOwner = user?.role === 'studio_owner';
+  const isStudent = user?.role === 'student';
 
   const teacherQuery = useQuery({
     queryKey: ['teacher-profile'],
@@ -21,7 +23,7 @@ export default function Profile() {
   const studentQuery = useQuery({
     queryKey: ['student-profile'],
     queryFn: () => api('/students/me'),
-    enabled: !isTeacher,
+    enabled: isStudent,
   });
   const studiosQuery = useQuery({
     queryKey: ['studios'],
@@ -68,7 +70,7 @@ export default function Profile() {
         defaultDurationMin: String(t.defaultDurationMin || 45),
         studioId: studio ? String(studio.id) : '',
       });
-    } else if (!isTeacher && studentQuery.data?.student) {
+    } else if (isStudent && studentQuery.data?.student) {
       const s = studentQuery.data.student;
       const names = Array.isArray(s.childrenNames) ? s.childrenNames.filter(Boolean) : [];
       setForm((f) => ({
@@ -79,8 +81,14 @@ export default function Profile() {
         isParent: s.isParent === true,
         childrenNames: names.length ? [...names, ''] : [''],
       }));
+    } else if (isOwner && user) {
+      setForm((f) => ({
+        ...f,
+        fullName: user.fullName || '',
+        phone: user.phone || '',
+      }));
     }
-  }, [isTeacher, teacherQuery.data, studentQuery.data, myStudiosQuery.data]);
+  }, [isTeacher, isStudent, isOwner, user, teacherQuery.data, studentQuery.data, myStudiosQuery.data]);
 
   const save = useMutation({
     mutationFn: async () => {
@@ -113,6 +121,14 @@ export default function Profile() {
         if (!currentStudio || currentStudio.id !== studioId) {
           await api('/teachers/me/studios', { method: 'PUT', body: { studioId } });
         }
+      } else if (isOwner) {
+        await api('/owner/me', {
+          method: 'PATCH',
+          body: {
+            fullName: form.fullName,
+            phone: form.phone || '',
+          },
+        });
       } else {
         await api('/students/me', {
           method: 'PATCH',
@@ -136,10 +152,10 @@ export default function Profile() {
       if (isTeacher) {
         await teacherQuery.refetch();
         await myStudiosQuery.refetch();
-      } else {
+      } else if (isStudent) {
         await studentQuery.refetch();
       }
-      navigate(isTeacher ? '/teacher' : '/');
+      navigate(isTeacher ? '/teacher' : isOwner ? '/owner' : '/');
     },
     onError: (err) => {
       if (err.message === '__cancelled__') return;
@@ -149,7 +165,9 @@ export default function Profile() {
 
   const loading = isTeacher
     ? teacherQuery.isLoading || myStudiosQuery.isLoading
-    : studentQuery.isLoading;
+    : isStudent
+      ? studentQuery.isLoading
+      : false;
 
   const update = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
 
@@ -186,7 +204,17 @@ export default function Profile() {
             <input value={form.phone} onChange={update('phone')} autoComplete="tel" />
           </div>
 
-          {!isTeacher && (
+          {isOwner && (
+            <div className="field">
+              <label>Studio</label>
+              <input value={user.studioName || ''} readOnly disabled />
+              <p className="muted" style={{ fontSize: '12px', marginTop: '6px' }}>
+                Each studio has one owner. This studio is tied to your account.
+              </p>
+            </div>
+          )}
+
+          {isStudent && (
             <>
               <div className={`recurring-toggle${form.receiveEmails ? ' active' : ''}`}>
                 <div
@@ -394,7 +422,7 @@ export default function Profile() {
         </form>
       )}
 
-      {!loading && (!isTeacher || user.canBookAsStudent) && <PartnersPanel />}
+      {!loading && (isStudent || (isTeacher && user.canBookAsStudent)) && <PartnersPanel />}
     </div>
   );
 }

@@ -11,7 +11,7 @@ export default function ForgotPassword() {
   const { pathname } = useLocation();
   const role = roleFromPath(pathname);
   const loginPath = role === 'teacher' ? '/teacher/login' : '/student/login';
-  const roleLabel = role === 'teacher' ? 'Teacher' : 'Student';
+  const roleLabel = role === 'teacher' ? 'Teacher or studio owner' : 'Student';
   const btnClass = role === 'teacher' ? 'btn btn-primary btn-block' : 'btn btn-green btn-block';
 
   const [error, setError] = useState('');

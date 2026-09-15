@@ -30,8 +30,8 @@ export function AuthProvider({ children }) {
     return data.user;
   }, []);
 
-  const register = useCallback(async (payload) => {
-    const data = await api('/auth/register', { method: 'POST', body: payload });
+  const register = useCallback(async (payload, path = '/auth/register') => {
+    const data = await api(path, { method: 'POST', body: payload });
     setFreshSignIn(true);
     setUser(data.user);
     return data.user;

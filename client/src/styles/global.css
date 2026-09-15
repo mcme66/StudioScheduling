@@ -689,6 +689,116 @@ a:hover {
   color: var(--ink);
 }
 
+.range-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.range-picker-nav {
+  margin-bottom: 0;
+}
+.range-toggle {
+  display: flex;
+  justify-content: center;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--white);
+  width: fit-content;
+  margin: 0 auto;
+}
+.range-toggle button {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 16px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.range-toggle button + button {
+  border-left: 1px solid var(--border);
+}
+.range-toggle button.on {
+  background: var(--accent-light);
+  color: var(--accent-dark);
+}
+.range-presets {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.range-presets button {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--white);
+  color: var(--muted);
+  cursor: pointer;
+}
+.range-presets button.on,
+.range-presets button:hover {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+  background: var(--accent-light);
+}
+.fee-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.fee-table th,
+.fee-table td {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--cream);
+  text-align: left;
+}
+.fee-table th {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.fee-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.fee-table tfoot td {
+  border-bottom: none;
+  font-weight: 600;
+  padding-top: 10px;
+}
+.fee-week {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--cream);
+}
+.fee-week-label {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+.list-row-link {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  margin: 0 -0.25rem;
+  padding-left: 0.25rem;
+  padding-right: 0.25rem;
+  border-radius: 8px;
+}
+.list-row-link:hover {
+  background: var(--cream);
+  text-decoration: none;
+}
+
 /* Day groups + slot cards (student booking) */
 .day-group {
   margin-bottom: 1.5rem;
@@ -1400,4 +1510,61 @@ a.availability-row:hover {
 
 .confirm-lesson {
   scroll-margin-top: 1rem;
+}
+
+.class-chip {
+  align-items: flex-start;
+}
+.class-chip-meta {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+  line-height: 1.35;
+}
+.class-chip-actions {
+  display: flex;
+  flex-shrink: 0;
+}
+.owner-inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-end;
+  margin-top: 1rem;
+}
+.field .choice-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--ink);
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+.field .choice-row input {
+  width: auto;
+  margin: 0;
+}
+.day-picklist {
+  min-height: 10.5rem;
+  height: auto;
+}
+.field .field-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  margin-bottom: 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.time-ampm {
+  display: flex;
+  gap: 0.4rem;
+}
+.time-ampm select {
+  flex: 1;
 }

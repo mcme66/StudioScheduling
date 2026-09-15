@@ -18,8 +18,10 @@ export default function TeacherLogin() {
     const { email, password } = formValues(e, ['email', 'password']);
     setBusy(true);
     try {
-      await login({ role: 'teacher', email, password });
-      const dest = location.state?.from?.pathname || '/teacher';
+      const signedIn = await login({ role: 'teacher', email, password });
+      const dest =
+        location.state?.from?.pathname ||
+        (signedIn.role === 'studio_owner' ? '/owner' : '/teacher');
       navigate(dest, { replace: true });
     } catch (err) {
       setError(err.message);
@@ -30,7 +32,7 @@ export default function TeacherLogin() {
   return (
     <div className="container narrow">
       <h1 className="page-title">Teacher login</h1>
-      <p className="page-sub">Sign in to manage your schedule and bookings.</p>
+      <p className="page-sub">Sign in as a teacher or studio owner.</p>
 
       <form className="card" onSubmit={submit} method="post">
         {resetSuccess && (
@@ -69,6 +71,9 @@ export default function TeacherLogin() {
 
       <p className="center muted" style={{ marginTop: '1rem', fontSize: '14px' }}>
         New instructor? <Link to="/teacher/register">Create a teacher account</Link>
+      </p>
+      <p className="center muted" style={{ marginTop: '0.5rem', fontSize: '14px' }}>
+        <Link to="/teacher/owner-register">Owner account creation</Link>
       </p>
     </div>
   );

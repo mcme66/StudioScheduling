@@ -7,6 +7,7 @@ import SharePanel from '../components/SharePanel.jsx';
 import PaidToggle from '../components/PaidToggle.jsx';
 import Modal, { ModalOption } from '../components/Modal.jsx';
 import AddToCalendar from '../components/AddToCalendar.jsx';
+import StudioRoomsSchedule from '../components/StudioRoomsSchedule.jsx';
 import {
   WEEKDAYS,
   fmtTime,
@@ -271,6 +272,12 @@ export default function TeacherDashboard() {
     queryKey: ['my-studios'],
     queryFn: () => api('/teachers/me/studios'),
   });
+  const studioSlug = myStudiosQuery.data?.studios?.[0]?.slug;
+  const studioDetailQuery = useQuery({
+    queryKey: ['studio', studioSlug],
+    queryFn: () => api(`/studios/${studioSlug}`),
+    enabled: !!studioSlug,
+  });
 
   const invalidateAll = () => {
     queryClient.invalidateQueries({ queryKey: ['slots'] });
@@ -438,6 +445,9 @@ export default function TeacherDashboard() {
 
   const openSlots = (scheduleQuery.data?.slots || []).filter((s) => s.status === 'open');
   const openUpcoming = openSlots.filter((s) => !isSlotPast(s.lessonDate, s.startTime));
+  const studioClasses = studioDetailQuery.data?.classSchedules || [];
+  const studioRooms = studioDetailQuery.data?.rooms || [];
+  const studioName = myStudiosQuery.data?.studios?.[0]?.name;
 
   return (
     <div className="container">
@@ -445,6 +455,15 @@ export default function TeacherDashboard() {
       <p className="page-sub">
         Manage lesson times for the week you&apos;re viewing, bookings, and weekly spot requests.
       </p>
+
+      {(studioRooms.length > 0 || studioClasses.length > 0) && (
+        <StudioRoomsSchedule
+          rooms={studioRooms}
+          classes={studioClasses}
+          scheduleTitle={studioName ? `${studioName} class schedule` : 'Studio class schedule'}
+          scheduleDescription="Weekly group classes published by the studio. Private lessons are still booked on your schedule below."
+        />
+      )}
 
       {/* Week navigation for bookings/share */}
       <div className="week-nav">
