@@ -83,7 +83,6 @@ export async function assertSlotOpenOnDate(client, slot, lessonDate, opts = {}) 
   );
   const pendingCovers =
     pendingRows[0] &&
-    pendingRows[0].student_id !== bookerStudentId &&
     recurringCoversDate(
       lessonDate,
       pendingRows[0].starts_on ? fmtDate(pendingRows[0].starts_on) : null,
@@ -91,6 +90,12 @@ export async function assertSlotOpenOnDate(client, slot, lessonDate, opts = {}) 
       slot.series_end_date ? fmtDate(slot.series_end_date) : null,
     );
   if (pendingCovers) {
+    if (bookerStudentId && pendingRows[0].student_id === bookerStudentId) {
+      throw new HttpError(
+        409,
+        'You already requested this as a weekly spot. It stays pending until your instructor responds.',
+      );
+    }
     throw new HttpError(409, 'This time has a pending weekly spot request.');
   }
 

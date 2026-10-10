@@ -16,17 +16,32 @@ async function upsertStudio({
   description,
   floorFeePercent = null,
   floorFeeFlatCents = null,
+  studioStudentFloorFeePercent = null,
+  studioStudentFloorFeeCents = null,
 }) {
   const { rows } = await query(
-    `INSERT INTO studios (name, slug, description, floor_fee_percent, floor_fee_flat_cents)
-     VALUES ($1, $2, $3, COALESCE($4, 0), COALESCE($5, 0))
+    `INSERT INTO studios (
+       name, slug, description, floor_fee_percent, floor_fee_flat_cents,
+       studio_student_floor_fee_percent, studio_student_floor_fee_cents
+     )
+     VALUES ($1, $2, $3, COALESCE($4, 0), COALESCE($5, 0), COALESCE($6, 0), COALESCE($7, 0))
      ON CONFLICT (slug) DO UPDATE SET
        name = EXCLUDED.name,
        description = EXCLUDED.description,
        floor_fee_percent = COALESCE($4, studios.floor_fee_percent),
-       floor_fee_flat_cents = COALESCE($5, studios.floor_fee_flat_cents)
+       floor_fee_flat_cents = COALESCE($5, studios.floor_fee_flat_cents),
+       studio_student_floor_fee_percent = COALESCE($6, studios.studio_student_floor_fee_percent),
+       studio_student_floor_fee_cents = COALESCE($7, studios.studio_student_floor_fee_cents)
      RETURNING id`,
-    [name, slug, description, floorFeePercent, floorFeeFlatCents],
+    [
+      name,
+      slug,
+      description,
+      floorFeePercent,
+      floorFeeFlatCents,
+      studioStudentFloorFeePercent,
+      studioStudentFloorFeeCents,
+    ],
   );
   return rows[0].id;
 }
@@ -317,6 +332,8 @@ async function seed() {
       'Private dance lessons in a welcoming island-style studio. Book one-off sessions or request a weekly spot.',
     floorFeePercent: 20,
     floorFeeFlatCents: 1000,
+    studioStudentFloorFeePercent: 0,
+    studioStudentFloorFeeCents: 1000,
   });
   const rhythmId = await upsertStudio({
     name: 'Rhythm Room',
@@ -544,7 +561,8 @@ async function seed() {
     }
   }
 
-  // Alex has a pending weekly request on Wednesday 4pm, plus this week's lesson.
+  // Alex has a pending weekly request on Wednesday 4pm. Nothing is booked
+  // until the instructor accepts it.
   if (wed1600) {
     const wedLesson = dateForWeekday(thisMonday, 3);
     await ensureRecurring({
@@ -552,11 +570,6 @@ async function seed() {
       studentId: alexId,
       status: 'pending',
       startsOn: wedLesson,
-    });
-    await ensureBooking({
-      slotId: wed1600,
-      studentId: alexId,
-      lessonDate: wedLesson,
     });
   }
 

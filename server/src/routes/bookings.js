@@ -8,6 +8,7 @@ import {
   todayISO,
   recurringCoversDate,
   nextWeekdayOnOrAfter,
+  getMonday,
 } from '../utils/week.js';
 import { sendBookingConfirmation } from '../services/email.js';
 import { normalizeChildrenNames } from './students.js';
@@ -163,12 +164,18 @@ bookingsRouter.get(
          JOIN students st ON st.id = b.student_id
          LEFT JOIN students pp ON pp.id = b.payment_partner_id
         WHERE b.student_id = ANY($1::int[]) AND b.status = 'booked'
+          AND NOT EXISTS (
+            SELECT 1 FROM recurring_assignments ra
+             WHERE ra.slot_id = b.slot_id
+               AND ra.student_id = b.student_id
+               AND ra.status = 'pending'
+               AND ra.starts_on <= b.lesson_date
+          )
         ORDER BY b.lesson_date`,
       [visibleIds],
     );
 
-    const { rows: recurring } = await query(
-      `SELECT ra.id, ra.slot_id, ra.child_name, ra.student_id, ra.payment_partner_id, ra.starts_on,
+    const recurringSql = `SELECT ra.id, ra.slot_id, ra.child_name, ra.student_id, ra.payment_partner_id, ra.starts_on,
               st.full_name AS booker_name, pp.full_name AS payment_partner_name,
               s.weekday, s.start_time, s.duration_min, s.price_cents,
               s.series_start_date, s.series_end_date,
@@ -178,10 +185,12 @@ bookingsRouter.get(
          JOIN teachers t ON t.id = s.teacher_id
          JOIN students st ON st.id = ra.student_id
          LEFT JOIN students pp ON pp.id = ra.payment_partner_id
-        WHERE ra.student_id = ANY($1::int[]) AND ra.status = 'approved'
-        ORDER BY s.weekday, s.start_time`,
-      [visibleIds],
-    );
+        WHERE ra.student_id = ANY($1::int[]) AND ra.status = $2
+        ORDER BY s.weekday, s.start_time`;
+    const [{ rows: recurring }, { rows: pendingRecurring }] = await Promise.all([
+      query(recurringSql, [visibleIds, 'approved']),
+      query(recurringSql, [visibleIds, 'pending']),
+    ]);
 
     const visibleBookings = bookings.filter((b) =>
       partnerCoversLesson(links, bookerStudentId, b.student_id, b.child_name),
@@ -189,17 +198,21 @@ bookingsRouter.get(
     const visibleRecurring = recurring.filter((r) =>
       partnerCoversLesson(links, bookerStudentId, r.student_id, r.child_name),
     );
+    const visiblePending = pendingRecurring.filter((r) =>
+      partnerCoversLesson(links, bookerStudentId, r.student_id, r.child_name),
+    );
 
     const today = todayISO();
 
-    // Upcoming per-week exceptions for this student's weekly slots.
+    // Per-week exceptions from the start of this week, so the week calendar
+    // can show earlier days of the current week correctly.
     const recurringSlotIds = visibleRecurring.map((r) => r.slot_id);
     let exceptionsBySlot = new Map();
     if (recurringSlotIds.length) {
       const { rows: excRows } = await query(
         `SELECT slot_id, exception_date, kind FROM slot_exceptions
           WHERE slot_id = ANY($1::int[]) AND exception_date >= $2`,
-        [recurringSlotIds, today],
+        [recurringSlotIds, getMonday(today)],
       );
       for (const e of excRows) {
         const date = fmtDate(e.exception_date);
@@ -266,6 +279,22 @@ bookingsRouter.get(
     res.json({
       upcoming: mapped.filter((b) => !b.past),
       past: mapped.filter((b) => b.past).reverse(),
+      pending: visiblePending.map((r) => {
+        const access = accessFor(r);
+        return {
+          id: r.id,
+          slotId: r.slot_id,
+          weekday: r.weekday,
+          startTime: fmtTime(r.start_time),
+          durationMin: r.duration_min,
+          childName: r.child_name || null,
+          startsOn: r.starts_on ? fmtDate(r.starts_on) : null,
+          teacher: { id: r.teacher_id, name: r.teacher_name },
+          isPartner: access.isPartner,
+          partnerName: access.partnerName,
+          canManage: access.canManage,
+        };
+      }),
       recurring: visibleRecurring.flatMap((r) => {
         const startsOn = r.starts_on ? fmtDate(r.starts_on) : null;
         const seriesStart = r.series_start_date ? fmtDate(r.series_start_date) : null;

@@ -211,7 +211,7 @@ export default function OwnerRegister() {
       </form>
 
       <p className="center muted" style={{ marginTop: '1rem', fontSize: '14px' }}>
-        Already have an account? <Link to="/teacher/login">Teacher login</Link>
+        Already have an account? <Link to="/login">Log in</Link>
       </p>
     </div>
   );

@@ -4,15 +4,17 @@ import { api } from '../api/client.js';
 import { formValues } from '../lib/form.js';
 
 function roleFromPath(pathname) {
-  return pathname.startsWith('/teacher') ? 'teacher' : 'student';
+  if (pathname.startsWith('/teacher')) return 'teacher';
+  if (pathname.startsWith('/student')) return 'student';
+  return null;
 }
 
 export default function ForgotPassword() {
   const { pathname } = useLocation();
   const role = roleFromPath(pathname);
-  const loginPath = role === 'teacher' ? '/teacher/login' : '/student/login';
-  const roleLabel = role === 'teacher' ? 'Teacher or studio owner' : 'Student';
-  const btnClass = role === 'teacher' ? 'btn btn-primary btn-block' : 'btn btn-green btn-block';
+  const loginPath = '/login';
+  const roleLabel = role === 'teacher' ? 'Teacher or studio owner' : role === 'student' ? 'Student' : '';
+  const btnClass = 'btn btn-primary btn-block';
 
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -27,7 +29,7 @@ export default function ForgotPassword() {
     try {
       const data = await api('/auth/forgot-password', {
         method: 'POST',
-        body: { role, email },
+        body: role ? { role, email } : { email },
       });
       setSuccess(data.message);
     } catch (err) {
@@ -38,7 +40,7 @@ export default function ForgotPassword() {
 
   return (
     <div className="container narrow">
-      <h1 className="page-title">{roleLabel} password reset</h1>
+      <h1 className="page-title">{roleLabel ? `${roleLabel} password reset` : 'Reset your password'}</h1>
       <p className="page-sub">Enter your email and we will send you a link to reset your password.</p>
 
       {success ? (

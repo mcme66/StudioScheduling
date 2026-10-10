@@ -6,8 +6,7 @@ import StudioDetail from './pages/StudioDetail.jsx';
 import InstructorSchedule from './pages/InstructorSchedule.jsx';
 import MyLessons from './pages/MyLessons.jsx';
 import TeacherDashboard from './pages/TeacherDashboard.jsx';
-import TeacherLogin from './pages/TeacherLogin.jsx';
-import StudentLogin from './pages/StudentLogin.jsx';
+import Login from './pages/Login.jsx';
 import ForgotPassword from './pages/ForgotPassword.jsx';
 import ResetPassword from './pages/ResetPassword.jsx';
 import TeacherRegister from './pages/TeacherRegister.jsx';
@@ -25,14 +24,17 @@ export default function App() {
         <Route path="/studios/:slug" element={<StudioDetail />} />
         <Route path="/studios/:slug/book/:teacherId" element={<InstructorSchedule />} />
 
-        <Route path="/teacher/login" element={<TeacherLogin />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/teacher/login" element={<Navigate to="/login" replace />} />
         <Route path="/teacher/register" element={<TeacherRegister />} />
         <Route path="/teacher/owner-register" element={<OwnerRegister />} />
-        <Route path="/teacher/forgot-password" element={<ForgotPassword />} />
+        <Route path="/teacher/forgot-password" element={<Navigate to="/forgot-password" replace />} />
         <Route path="/teacher/reset-password" element={<ResetPassword />} />
-        <Route path="/student/login" element={<StudentLogin />} />
+        <Route path="/student/login" element={<Navigate to="/login" replace />} />
         <Route path="/student/register" element={<StudentRegister />} />
-        <Route path="/student/forgot-password" element={<ForgotPassword />} />
+        <Route path="/student/forgot-password" element={<Navigate to="/forgot-password" replace />} />
         <Route path="/student/reset-password" element={<ResetPassword />} />
 
         <Route
@@ -80,7 +82,6 @@ export default function App() {
         />
 
         {/* Legacy redirects */}
-        <Route path="/login" element={<Navigate to="/student/login" replace />} />
         <Route path="/register" element={<Navigate to="/student/register" replace />} />
         <Route path="/book/:teacherId" element={<Navigate to="/" replace />} />
 

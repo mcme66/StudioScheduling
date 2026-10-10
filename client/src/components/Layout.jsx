@@ -14,6 +14,10 @@ export default function Layout() {
   return (
     <>
       <header className="app-header">
+        <Link to="/" className="header-brand">
+          <img src="/logo.png" alt="Studio Core" />
+        </Link>
+
         <div className="header-side header-left">
           {user?.role === 'teacher' ? (
             <>
@@ -32,7 +36,7 @@ export default function Layout() {
           ) : user?.role === 'studio_owner' ? (
             <>
               <NavLink to="/owner" className="header-nav-pill">
-                Studio
+                Dashboard
               </NavLink>
               <Link to="/profile" className="header-nav-pill">
                 {user.fullName}
@@ -47,16 +51,8 @@ export default function Layout() {
                 {user.fullName}
               </Link>
             </>
-          ) : (
-            <NavLink to="/teacher/login" className="header-auth-btn header-auth-teacher">
-              Teacher Login
-            </NavLink>
-          )}
+          ) : null}
         </div>
-
-        <Link to="/" className="header-brand">
-          Studio Core
-        </Link>
 
         <div className="header-side header-right">
           {user ? (
@@ -64,8 +60,8 @@ export default function Layout() {
               Log out
             </button>
           ) : (
-            <NavLink to="/student/login" className="header-auth-btn header-auth-student">
-              Student Login
+            <NavLink to="/login" className="header-auth-btn">
+              Log in
             </NavLink>
           )}
         </div>

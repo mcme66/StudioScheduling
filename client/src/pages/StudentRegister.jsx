@@ -91,7 +91,7 @@ export default function StudentRegister() {
       </form>
 
       <p className="center muted" style={{ marginTop: '1rem', fontSize: '14px' }}>
-        Already have an account? <Link to="/student/login">Student login</Link>
+        Already have an account? <Link to="/login">Log in</Link>
       </p>
     </div>
   );

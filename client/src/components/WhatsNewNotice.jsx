@@ -24,14 +24,33 @@ export default function WhatsNewNotice() {
   return (
     <Modal title="What’s new" subtitle="A few updates since you last visited." onClose={dismiss}>
       <div className="whats-new-body">
-        <p>
-          Your instructor can now schedule a lesson for you. It shows up at the top of{' '}
-          <Link to="/my-lessons" onClick={dismiss}>
-            My lessons
-          </Link>
-          {' '}
-          accept or decline it there. Parent accounts will already see which child it is for.
-        </p>
+        <ul className="whats-new-list">
+          <li>
+            <strong>A calendar of your week.</strong>{' '}
+            <Link to="/my-lessons" onClick={dismiss}>
+              My lessons
+            </Link>{' '}
+            now shows your lessons on a calendar, with a color for each child.
+          </li>
+          <li>
+            <strong>Pick your colors.</strong> Choose lesson colors on your{' '}
+            <Link to="/profile" onClick={dismiss}>
+              Profile
+            </Link>
+            .
+          </li>
+          <li>
+            <strong>Weekly spots need a yes.</strong> When you ask for a weekly time, it stays
+            pending until your instructor says yes.
+          </li>
+          <li>
+            <strong>Search by time range.</strong> Find lessons that fit between a start and end
+            time.
+          </li>
+          <li>
+            <strong>One place to log in</strong> for everyone, plus a fresh new logo.
+          </li>
+        </ul>
       </div>
       <button type="button" className="btn btn-primary btn-block" onClick={dismiss}>
         Got it

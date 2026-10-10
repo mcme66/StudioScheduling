@@ -58,9 +58,14 @@ studiosRouter.get(
 
 const fmtTime = (t) => (typeof t === 'string' ? t.slice(0, 5) : t);
 
+const quarterHour = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):(00|15|30|45)$/, 'Times must be in 15-minute steps.');
+
 const availabilityQuerySchema = z.object({
   date: z.string().refine(isValidDateStr, 'date must be YYYY-MM-DD.'),
-  time: z.string().regex(/^\d{2}:\d{2}$/, 'time must be HH:MM.'),
+  from: quarterHour,
+  to: quarterHour,
 });
 
 const MAX_WEEKS_AHEAD = 4;
@@ -68,13 +73,16 @@ const MAX_WEEKS_AHEAD = 4;
 studiosRouter.get(
   '/:slug/availability',
   asyncHandler(async (req, res) => {
-    const { date, time } = availabilityQuerySchema.parse(req.query);
+    const { date, from, to } = availabilityQuerySchema.parse(req.query);
 
     const today = todayISO();
     if (date < today) {
       throw new HttpError(400, 'That date is in the past.');
     }
-    if (isLessonPast(date, time)) {
+    if (from >= to) {
+      throw new HttpError(400, 'The end of the range has to be after the start.');
+    }
+    if (isLessonPast(date, to)) {
       throw new HttpError(400, 'That time has already passed.');
     }
 
@@ -90,7 +98,6 @@ studiosRouter.get(
     if (!studio) throw new HttpError(404, 'Studio not found.');
 
     const weekday = weekdayOf(date);
-    const timeValue = `${time}:00`;
 
     const { rows } = await query(
       `SELECT s.id AS slot_id, s.start_time, s.duration_min, s.price_cents,
@@ -101,7 +108,9 @@ studiosRouter.get(
         WHERE s.active = true
           AND t.is_active
           AND s.weekday = $2
-          AND s.start_time = $3::time
+          AND s.start_time >= $3::time
+          AND (s.start_time + make_interval(mins => s.duration_min)) <= $5::time
+          AND (s.start_time + make_interval(mins => s.duration_min)) > s.start_time
           AND (s.one_off_date IS NULL OR s.one_off_date = $4::date)
           AND (
             s.one_off_date IS NOT NULL
@@ -132,22 +141,25 @@ studiosRouter.get(
             SELECT 1 FROM lesson_invites li
              WHERE li.slot_id = s.id AND li.status = 'pending' AND li.lesson_date = $4::date
           )
-        ORDER BY t.full_name`,
-      [studio.id, weekday, timeValue, date],
+        ORDER BY s.start_time, t.full_name`,
+      [studio.id, weekday, `${from}:00`, date, `${to}:00`],
     );
 
     res.json({
       date,
-      time,
-      results: rows.map((r) => ({
-        slotId: r.slot_id,
-        teacherId: r.teacher_id,
-        teacherName: r.full_name,
-        startTime: fmtTime(r.start_time),
-        durationMin: r.duration_min,
-        priceCents: r.price_cents,
-        lessonDate: date,
-      })),
+      from,
+      to,
+      results: rows
+        .filter((r) => !isLessonPast(date, fmtTime(r.start_time)))
+        .map((r) => ({
+          slotId: r.slot_id,
+          teacherId: r.teacher_id,
+          teacherName: r.full_name,
+          startTime: fmtTime(r.start_time),
+          durationMin: r.duration_min,
+          priceCents: r.price_cents,
+          lessonDate: date,
+        })),
     });
   }),
 );

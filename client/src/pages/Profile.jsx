@@ -5,6 +5,8 @@ import { api } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useToast } from '../components/Toast.jsx';
 import Modal, { ModalOption } from '../components/Modal.jsx';
+import ColorSelect from '../components/ColorSelect.jsx';
+import { DEFAULT_LESSON_COLOR, withTrailingChild } from '../lib/lessonColors.js';
 
 export default function Profile() {
   const { user, refresh } = useAuth();
@@ -23,12 +25,12 @@ export default function Profile() {
   const studentQuery = useQuery({
     queryKey: ['student-profile'],
     queryFn: () => api('/students/me'),
-    enabled: isStudent,
+    enabled: isStudent || (isTeacher && user?.canBookAsStudent === true),
   });
   const studiosQuery = useQuery({
     queryKey: ['studios'],
     queryFn: () => api('/studios'),
-    enabled: isTeacher,
+    enabled: isTeacher || isStudent,
   });
   const myStudiosQuery = useQuery({
     queryKey: ['my-studios'],
@@ -41,7 +43,8 @@ export default function Profile() {
     phone: '',
     receiveEmails: true,
     isParent: false,
-    childrenNames: [''],
+    children: [{ name: '', color: DEFAULT_LESSON_COLOR }],
+    lessonColor: DEFAULT_LESSON_COLOR,
     trackPayments: false,
     isActive: true,
     canBookAsStudent: false,
@@ -49,6 +52,7 @@ export default function Profile() {
     defaultPrice: '74',
     defaultDurationMin: '45',
     studioId: '',
+    homeStudioId: '',
   });
   const [error, setError] = useState('');
 
@@ -56,12 +60,14 @@ export default function Profile() {
     if (isTeacher && teacherQuery.data?.teacher) {
       const t = teacherQuery.data.teacher;
       const studio = myStudiosQuery.data?.studios?.[0];
+      const attended = studentQuery.data?.student;
       setForm({
         fullName: t.fullName || '',
         phone: t.phone || '',
         receiveEmails: t.receiveEmails !== false,
         isParent: false,
-        childrenNames: [''],
+        children: [{ name: '', color: DEFAULT_LESSON_COLOR }],
+        lessonColor: DEFAULT_LESSON_COLOR,
         isActive: t.isActive !== false,
         canBookAsStudent: t.canBookAsStudent === true,
         bio: t.bio || '',
@@ -69,17 +75,23 @@ export default function Profile() {
         defaultPrice: String((t.defaultPriceCents || 7400) / 100),
         defaultDurationMin: String(t.defaultDurationMin || 45),
         studioId: studio ? String(studio.id) : '',
+        homeStudioId: attended?.homeStudioId ? String(attended.homeStudioId) : '',
       });
     } else if (isStudent && studentQuery.data?.student) {
       const s = studentQuery.data.student;
       const names = Array.isArray(s.childrenNames) ? s.childrenNames.filter(Boolean) : [];
+      const colors = s.childrenColors || {};
       setForm((f) => ({
         ...f,
         fullName: s.fullName || '',
         phone: s.phone || '',
         receiveEmails: s.receiveEmails !== false,
         isParent: s.isParent === true,
-        childrenNames: names.length ? [...names, ''] : [''],
+        lessonColor: s.lessonColor || DEFAULT_LESSON_COLOR,
+        children: withTrailingChild(
+          names.map((name) => ({ name, color: colors[name] || DEFAULT_LESSON_COLOR })),
+        ),
+        homeStudioId: s.homeStudioId ? String(s.homeStudioId) : '',
       }));
     } else if (isOwner && user) {
       setForm((f) => ({
@@ -121,6 +133,12 @@ export default function Profile() {
         if (!currentStudio || currentStudio.id !== studioId) {
           await api('/teachers/me/studios', { method: 'PUT', body: { studioId } });
         }
+        if (form.canBookAsStudent) {
+          await api('/students/me', {
+            method: 'PATCH',
+            body: { homeStudioId: form.homeStudioId ? Number(form.homeStudioId) : null },
+          });
+        }
       } else if (isOwner) {
         await api('/owner/me', {
           method: 'PATCH',
@@ -137,9 +155,18 @@ export default function Profile() {
             phone: form.phone || '',
             receiveEmails: form.receiveEmails,
             isParent: form.isParent,
+            lessonColor: form.lessonColor || DEFAULT_LESSON_COLOR,
             childrenNames: form.isParent
-              ? form.childrenNames.map((n) => n.trim()).filter(Boolean)
+              ? form.children.map((child) => child.name.trim()).filter(Boolean)
               : [],
+            childrenColors: form.isParent
+              ? Object.fromEntries(
+                  form.children
+                    .filter((child) => child.name.trim())
+                    .map((child) => [child.name.trim(), child.color || DEFAULT_LESSON_COLOR]),
+                )
+              : {},
+            homeStudioId: form.homeStudioId ? Number(form.homeStudioId) : null,
           },
         });
       }
@@ -164,9 +191,11 @@ export default function Profile() {
   });
 
   const loading = isTeacher
-    ? teacherQuery.isLoading || myStudiosQuery.isLoading
+    ? teacherQuery.isLoading ||
+      myStudiosQuery.isLoading ||
+      (user?.canBookAsStudent === true && studentQuery.isLoading)
     : isStudent
-      ? studentQuery.isLoading
+      ? studentQuery.isLoading || studiosQuery.isLoading
       : false;
 
   const update = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
@@ -176,13 +205,14 @@ export default function Profile() {
   }
 
   return (
-    <div className="container narrow">
+    <div className={`container${isStudent ? ' owner-page' : ' narrow'}`}>
       <h1 className="page-title">Your profile</h1>
       <p className="page-sub">Update your account information.</p>
 
       {loading && <div className="loading">Loading profile…</div>}
 
       {!loading && (
+        <div className={isStudent ? 'owner-grid cols-2 align-start' : undefined}>
         <form
           className="card"
           onSubmit={(e) => {
@@ -216,6 +246,12 @@ export default function Profile() {
 
           {isStudent && (
             <>
+              <StudioAttendField
+                value={form.homeStudioId}
+                onChange={update('homeStudioId')}
+                studios={studiosQuery.data?.studios || []}
+                label="Studio you attend (Optional)"
+              />
               <div className={`recurring-toggle${form.receiveEmails ? ' active' : ''}`}>
                 <div
                   className="recurring-toggle-row"
@@ -241,11 +277,11 @@ export default function Profile() {
                     setForm((f) => ({
                       ...f,
                       isParent: !f.isParent,
-                      childrenNames: !f.isParent
-                        ? f.childrenNames?.length
-                          ? f.childrenNames
-                          : ['']
-                        : f.childrenNames,
+                      children: !f.isParent
+                        ? f.children?.some((child) => child.name.trim())
+                          ? f.children
+                          : withTrailingChild([])
+                        : f.children,
                     }))
                   }
                 >
@@ -262,36 +298,56 @@ export default function Profile() {
                 </div>
               </div>
 
+              {!form.isParent && (
+                <div className="parent-children">
+                  <label>Lesson color</label>
+                  <p className="muted" style={{ fontSize: '12px', marginBottom: '0.6rem' }}>
+                    This color marks your lessons on the week calendar.
+                  </p>
+                  <ColorSelect
+                    showLabel
+                    label="Your lesson color"
+                    value={form.lessonColor}
+                    onChange={(color) => setForm((f) => ({ ...f, lessonColor: color }))}
+                  />
+                </div>
+              )}
+
               {form.isParent && (
                 <div className="parent-children">
-                  <label>Children&apos;s names</label>
+                  <label>Children</label>
                   <p className="muted" style={{ fontSize: '12px', marginBottom: '0.6rem' }}>
-                    Enter each child you want to register for lessons. A new box appears when you
-                    fill the previous one.
+                    Enter each child you want to register for lessons. Pick a color for their
+                    lessons on the week calendar. A new row appears when you fill the previous one.
                   </p>
-                  {form.childrenNames.map((name, index) => (
-                    <div className="field" key={`child-${index}`} style={{ marginBottom: '0.5rem' }}>
+                  {(form.children || []).map((child, index) => (
+                    <div className="child-color-row" key={`child-${index}`}>
                       <input
-                        value={name}
+                        value={child.name}
                         placeholder={`Child ${index + 1} full name`}
                         aria-label={`Child ${index + 1} full name`}
                         onChange={(e) => {
                           const value = e.target.value;
                           setForm((f) => {
-                            const next = [...f.childrenNames];
-                            next[index] = value;
-                            // Keep one empty box after the last filled name.
-                            const trimmed = next.map((n) => n.trim());
-                            const lastFilled = trimmed.reduce(
-                              (acc, n, i) => (n ? i : acc),
-                              -1,
-                            );
-                            const kept = next.slice(0, Math.max(lastFilled + 1, 0));
-                            if (!kept.length || kept[kept.length - 1].trim()) kept.push('');
-                            return { ...f, childrenNames: kept };
+                            const next = [...(f.children || [])];
+                            next[index] = { ...next[index], name: value };
+                            return { ...f, children: withTrailingChild(next) };
                           });
                         }}
                       />
+                      {child.name.trim() && (
+                        <ColorSelect
+                          label={`${child.name.trim()} color`}
+                          value={child.color}
+                          onChange={(color) =>
+                            setForm((f) => {
+                              const next = [...(f.children || [])];
+                              next[index] = { ...next[index], color };
+                              return { ...f, children: next };
+                            })
+                          }
+                        />
+                      )}
                     </div>
                   ))}
                 </div>
@@ -345,6 +401,15 @@ export default function Profile() {
                   />
                 </div>
               </div>
+              {form.canBookAsStudent && (
+                <StudioAttendField
+                  value={form.homeStudioId}
+                  onChange={update('homeStudioId')}
+                  studios={studiosQuery.data?.studios || []}
+                  label="Studio you attend as a student"
+                  help="Optional. Lessons you book at this studio use its reduced floor fee."
+                />
+              )}
               <div className={`recurring-toggle${form.receiveEmails ? ' active' : ''}`}>
                 <div
                   className="recurring-toggle-row"
@@ -420,9 +485,30 @@ export default function Profile() {
             {save.isPending ? 'Saving…' : 'Save profile'}
           </button>
         </form>
+        {(isStudent || (isTeacher && user.canBookAsStudent)) && <PartnersPanel />}
+        </div>
       )}
+    </div>
+  );
+}
 
-      {!loading && (isStudent || (isTeacher && user.canBookAsStudent)) && <PartnersPanel />}
+function StudioAttendField({ value, onChange, studios, label, help }) {
+  return (
+    <div className="field">
+      <label>{label}</label>
+      {help && (
+        <p className="muted" style={{ fontSize: '12px', marginBottom: '6px' }}>
+          {help}
+        </p>
+      )}
+      <select value={value} onChange={onChange}>
+        <option value="">None</option>
+        {studios.map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.name}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }
@@ -488,7 +574,7 @@ function PartnersPanel() {
   const childCodes = data?.childPartnerCodes || [];
 
   return (
-    <div className="card" style={{ marginTop: '1.25rem' }}>
+    <div className="card">
       <div className="section-title">Lesson partners</div>
       <p className="muted" style={{ fontSize: '13px', marginBottom: '0.9rem' }}>
         {isParent

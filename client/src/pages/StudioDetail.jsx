@@ -11,20 +11,24 @@ import {
 } from '../lib/format.js';
 import StudioRoomsSchedule from '../components/StudioRoomsSchedule.jsx';
 
-const TIME_OPTIONS = (() => {
+function quarterHours(startMin, endMin) {
   const out = [];
-  for (let h = 7; h <= 20; h++) {
-    for (const m of [0, 15, 30, 45]) {
-      out.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
-    }
+  for (let mins = startMin; mins <= endMin; mins += 15) {
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    out.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
   }
   return out;
-})();
+}
+
+const FROM_OPTIONS = quarterHours(7 * 60, 23 * 60 + 30);
+const TO_OPTIONS = quarterHours(7 * 60 + 15, 23 * 60 + 45);
 
 export default function StudioDetail() {
   const { slug } = useParams();
   const [searchDate, setSearchDate] = useState('');
-  const [searchTime, setSearchTime] = useState('');
+  const [searchFrom, setSearchFrom] = useState('');
+  const [searchTo, setSearchTo] = useState('');
   const [submitted, setSubmitted] = useState(null);
 
   const { data, isLoading, isError, error } = useQuery({
@@ -33,18 +37,21 @@ export default function StudioDetail() {
   });
 
   const availabilityQuery = useQuery({
-    queryKey: ['studio-availability', slug, submitted?.date, submitted?.time],
+    queryKey: ['studio-availability', slug, submitted?.date, submitted?.from, submitted?.to],
     queryFn: () =>
       api(
-        `/studios/${slug}/availability?date=${encodeURIComponent(submitted.date)}&time=${encodeURIComponent(submitted.time)}`,
+        `/studios/${slug}/availability?date=${encodeURIComponent(submitted.date)}&from=${encodeURIComponent(submitted.from)}&to=${encodeURIComponent(submitted.to)}`,
       ),
     enabled: !!submitted,
   });
 
+  const toOptions = TO_OPTIONS.filter((t) => !searchFrom || t > searchFrom);
+  const canSearch = Boolean(searchDate && searchFrom && searchTo && searchFrom < searchTo);
+
   const runSearch = (e) => {
     e.preventDefault();
-    if (!searchDate || !searchTime) return;
-    setSubmitted({ date: searchDate, time: searchTime });
+    if (!canSearch) return;
+    setSubmitted({ date: searchDate, from: searchFrom, to: searchTo });
   };
 
   const dateOptions = bookableDates();
@@ -71,10 +78,13 @@ export default function StudioDetail() {
 
           {data.teachers.length > 0 && (
             <details className="card studio-search">
-              <summary className="studio-search-summary">Find a lesson by date &amp; time</summary>
+              <summary className="studio-search-summary">
+                <span>Find a lesson by date &amp; time</span>
+              </summary>
               <div className="studio-search-body">
               <p className="muted" style={{ fontSize: '14px', marginBottom: '1rem' }}>
-                Search across all instructors at this studio for an open time slot.
+                An open lesson is listed only when it starts and ends inside the range. A 3:00–3:45
+                lesson shows up in a 1:00–3:45 search, and not in a 1:00–3:30 search.
               </p>
               <form className="studio-search-form" onSubmit={runSearch}>
                 <div className="field">
@@ -94,22 +104,43 @@ export default function StudioDetail() {
                   </select>
                 </div>
                 <div className="field">
-                  <label htmlFor="search-time">Time</label>
+                  <label htmlFor="search-from">From</label>
                   <select
-                    id="search-time"
-                    value={searchTime}
-                    onChange={(e) => setSearchTime(e.target.value)}
+                    id="search-from"
+                    value={searchFrom}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setSearchFrom(next);
+                      if (searchTo && next && searchTo <= next) setSearchTo('');
+                    }}
                     required
                   >
-                    <option value="">Select a time</option>
-                    {TIME_OPTIONS.map((t) => (
+                    <option value="">Select a start</option>
+                    {FROM_OPTIONS.map((t) => (
                       <option key={t} value={t}>
                         {fmtTime(t)}
                       </option>
                     ))}
                   </select>
                 </div>
-                <button type="submit" className="btn btn-primary" disabled={!searchDate || !searchTime}>
+                <div className="field">
+                  <label htmlFor="search-to">To</label>
+                  <select
+                    id="search-to"
+                    value={searchTo}
+                    onChange={(e) => setSearchTo(e.target.value)}
+                    required
+                    disabled={!searchFrom}
+                  >
+                    <option value="">Select an end</option>
+                    {toOptions.map((t) => (
+                      <option key={t} value={t}>
+                        {fmtTime(t)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button type="submit" className="btn btn-primary" disabled={!canSearch}>
                   Search
                 </button>
               </form>
@@ -128,7 +159,7 @@ export default function StudioDetail() {
                 <div className="studio-search-results">
                   {availabilityQuery.data.results.length === 0 ? (
                     <p className="muted center" style={{ fontSize: '14px', padding: '0.5rem 0' }}>
-                      No teachers are available to teach at that time.
+                      No open lessons start and end inside that range.
                     </p>
                   ) : (
                     <div className="availability-list">

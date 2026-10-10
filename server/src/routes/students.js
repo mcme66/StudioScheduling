@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db.js';
 import { asyncHandler, HttpError } from '../middleware/error.js';
-import { requireAuth, requireRole } from '../middleware/auth.js';
+import { requireAuth } from '../middleware/auth.js';
 import { resolveBookerStudentId } from '../utils/booker.js';
 import {
   allocatePartnerCode,
@@ -17,13 +17,67 @@ import {
 
 export const studentsRouter = Router();
 
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+const LESSON_COLOR_PALETTE = [
+  '#2d6a4f',
+  '#c8401a',
+  '#2a4a7a',
+  '#6b3a6b',
+  '#8a6a12',
+  '#1f6f6a',
+  '#9c3d55',
+  '#3d4f66',
+];
+const DEFAULT_LESSON_COLOR = LESSON_COLOR_PALETTE[0];
+
 const profileSchema = z.object({
   fullName: z.string().min(1).max(120).optional(),
   phone: z.string().max(40).optional().or(z.literal('')),
   receiveEmails: z.boolean().optional(),
   isParent: z.boolean().optional(),
   childrenNames: z.array(z.string().max(120)).max(20).optional(),
+  childrenColors: z.record(z.string(), z.string()).optional(),
+  lessonColor: z.string().optional(),
+  homeStudioId: z.number().int().positive().nullable().optional(),
 });
+
+function isHexColor(value) {
+  return typeof value === 'string' && HEX_COLOR.test(value);
+}
+
+function resolveChildColors(names, stored) {
+  const raw = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+  const used = new Set();
+  const out = {};
+  names.forEach((name, index) => {
+    const saved = raw[name] || raw[name.toLowerCase()];
+    let color = isHexColor(saved) ? saved.toLowerCase() : null;
+    if (!color) {
+      color = LESSON_COLOR_PALETTE.find((c) => !used.has(c)) || LESSON_COLOR_PALETTE[index % LESSON_COLOR_PALETTE.length];
+    }
+    out[name] = color;
+    used.add(color);
+  });
+  return out;
+}
+
+/** Persist colors by lowercase name. Explicit choices are kept, even if shared. */
+function storeChildColors(names, incoming, previous) {
+  const prev = previous && typeof previous === 'object' && !Array.isArray(previous) ? previous : {};
+  const used = new Set();
+  const out = {};
+  names.forEach((name, index) => {
+    const key = name.toLowerCase();
+    const raw = incoming?.[name] || incoming?.[key] || prev[key] || prev[name];
+    let color = isHexColor(raw) ? raw.toLowerCase() : null;
+    if (!color) {
+      color = LESSON_COLOR_PALETTE.find((c) => !used.has(c)) || LESSON_COLOR_PALETTE[index % LESSON_COLOR_PALETTE.length];
+    }
+    out[key] = color;
+    used.add(color);
+  });
+  return out;
+}
 
 /** Trim, drop blanks, de-dupe (case-insensitive) while preserving first spelling. */
 export function normalizeChildrenNames(names) {
@@ -50,7 +104,31 @@ function mapStudent(row) {
     receiveEmails: row.receive_emails !== false,
     isParent: row.is_parent === true,
     childrenNames: Array.isArray(row.children_names) ? row.children_names : [],
+    childrenColors: resolveChildColors(
+      Array.isArray(row.children_names) ? row.children_names : [],
+      row.child_colors,
+    ),
+    lessonColor: isHexColor(row.lesson_color) ? row.lesson_color.toLowerCase() : DEFAULT_LESSON_COLOR,
+    homeStudioId: row.home_studio_id || null,
+    homeStudioName: row.home_studio_name || null,
   };
+}
+
+async function loadStudent(studentId) {
+  const { rows } = await query(
+    `SELECT s.*, h.name AS home_studio_name
+       FROM students s
+       LEFT JOIN studios h ON h.id = s.home_studio_id
+      WHERE s.id = $1`,
+    [studentId],
+  );
+  return rows[0] || null;
+}
+
+async function assertStudioExists(studioId) {
+  if (studioId == null) return;
+  const { rows } = await query('SELECT id FROM studios WHERE id = $1', [studioId]);
+  if (!rows[0]) throw new HttpError(400, 'That studio does not exist.');
 }
 
 studentsRouter.get(
@@ -59,17 +137,36 @@ studentsRouter.get(
   asyncHandler(async (req, res) => {
     // Students, or teachers with “Student as well?” enabled (linked student row).
     const studentId = await resolveBookerStudentId(req.user);
-    const { rows } = await query('SELECT * FROM students WHERE id = $1', [studentId]);
-    if (!rows[0]) throw new HttpError(401, 'Account no longer exists.');
-    res.json({ student: mapStudent(rows[0]) });
+    const student = await loadStudent(studentId);
+    if (!student) throw new HttpError(401, 'Account no longer exists.');
+    res.json({ student: mapStudent(student) });
   }),
 );
 
 studentsRouter.patch(
   '/me',
-  requireRole('student'),
+  requireAuth,
   asyncHandler(async (req, res) => {
     const data = profileSchema.parse(req.body);
+
+    if (req.user.role === 'teacher') {
+      if (data.homeStudioId === undefined) {
+        throw new HttpError(400, 'Nothing to update.');
+      }
+      const studentId = await resolveBookerStudentId(req.user);
+      await assertStudioExists(data.homeStudioId);
+      await query('UPDATE students SET home_studio_id = $1 WHERE id = $2', [
+        data.homeStudioId,
+        studentId,
+      ]);
+      const student = await loadStudent(studentId);
+      if (!student) throw new HttpError(401, 'Account no longer exists.');
+      return res.json({ student: mapStudent(student) });
+    }
+    if (req.user.role !== 'student') {
+      throw new HttpError(403, 'Only students can update this profile.');
+    }
+
     const fields = [];
     const values = [];
     let idx = 1;
@@ -92,11 +189,37 @@ studentsRouter.patch(
       if (!data.isParent && data.childrenNames === undefined) {
         fields.push(`children_names = $${idx++}`);
         values.push([]);
+        fields.push(`child_colors = $${idx++}`);
+        values.push({});
       }
     }
-    if (data.childrenNames !== undefined) {
-      fields.push(`children_names = $${idx++}`);
-      values.push(normalizeChildrenNames(data.childrenNames));
+    if (data.childrenNames !== undefined || data.childrenColors !== undefined) {
+      const { rows: currentRows } = await query(
+        'SELECT children_names, child_colors FROM students WHERE id = $1',
+        [req.user.id],
+      );
+      const current = currentRows[0] || {};
+      const names = data.childrenNames !== undefined
+        ? normalizeChildrenNames(data.childrenNames)
+        : normalizeChildrenNames(current.children_names);
+      if (data.childrenNames !== undefined) {
+        fields.push(`children_names = $${idx++}`);
+        values.push(names);
+      }
+      fields.push(`child_colors = $${idx++}`);
+      values.push(storeChildColors(names, data.childrenColors, current.child_colors));
+    }
+    if (data.lessonColor !== undefined) {
+      if (!isHexColor(data.lessonColor)) {
+        throw new HttpError(400, 'Choose a lesson color.');
+      }
+      fields.push(`lesson_color = $${idx++}`);
+      values.push(data.lessonColor.toLowerCase());
+    }
+    if (data.homeStudioId !== undefined) {
+      await assertStudioExists(data.homeStudioId);
+      fields.push(`home_studio_id = $${idx++}`);
+      values.push(data.homeStudioId);
     }
     if (!fields.length) throw new HttpError(400, 'Nothing to update.');
     values.push(req.user.id);
@@ -111,7 +234,8 @@ studentsRouter.patch(
         student.is_parent ? student.children_names : [],
       );
     }
-    res.json({ student: mapStudent(student) });
+    const full = await loadStudent(student.id);
+    res.json({ student: mapStudent(full) });
   }),
 );
 

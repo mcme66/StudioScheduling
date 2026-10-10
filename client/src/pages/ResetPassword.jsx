@@ -5,7 +5,9 @@ import PasswordField from '../components/PasswordField.jsx';
 import { formValues } from '../lib/form.js';
 
 function roleFromPath(pathname) {
-  return pathname.startsWith('/teacher') ? 'teacher' : 'student';
+  if (pathname.startsWith('/teacher')) return 'teacher';
+  if (pathname.startsWith('/student')) return 'student';
+  return null;
 }
 
 export default function ResetPassword() {
@@ -13,9 +15,9 @@ export default function ResetPassword() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const role = roleFromPath(pathname);
-  const loginPath = role === 'teacher' ? '/teacher/login' : '/student/login';
-  const roleLabel = role === 'teacher' ? 'Teacher or studio owner' : 'Student';
-  const btnClass = role === 'teacher' ? 'btn btn-primary btn-block' : 'btn btn-green btn-block';
+  const loginPath = '/login';
+  const roleLabel = role === 'teacher' ? 'Teacher or studio owner' : role === 'student' ? 'Student' : '';
+  const btnClass = 'btn btn-primary btn-block';
   const token = searchParams.get('token') || '';
 
   const [error, setError] = useState('');
@@ -39,7 +41,7 @@ export default function ResetPassword() {
     try {
       await api('/auth/reset-password', {
         method: 'POST',
-        body: { role, token, password },
+        body: role ? { role, token, password } : { token, password },
       });
       navigate(`${loginPath}?reset=success`, { replace: true });
     } catch (err) {
@@ -50,7 +52,7 @@ export default function ResetPassword() {
 
   return (
     <div className="container narrow">
-      <h1 className="page-title">{roleLabel} password reset</h1>
+      <h1 className="page-title">{roleLabel ? `${roleLabel} password reset` : 'Reset your password'}</h1>
       <p className="page-sub">Choose a new password for your account.</p>
 
       <form className="card" onSubmit={submit} method="post">

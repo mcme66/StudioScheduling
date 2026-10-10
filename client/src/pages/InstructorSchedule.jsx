@@ -103,37 +103,34 @@ export default function InstructorSchedule() {
 
   const bookMutation = useMutation({
     mutationFn: async ({ slot, recurring, childName, paymentPartnerId }) => {
-      await api('/bookings', {
-        method: 'POST',
-        body: {
-          slotId: slot.id,
-          lessonDate: slot.lessonDate,
-          ...(childName ? { childName } : {}),
-          ...(paymentPartnerId ? { paymentPartnerId } : {}),
-        },
-      });
+      const body = {
+        slotId: slot.id,
+        lessonDate: slot.lessonDate,
+        ...(childName ? { childName } : {}),
+        ...(paymentPartnerId ? { paymentPartnerId } : {}),
+      };
       if (recurring) {
-        await api('/recurring', {
-          method: 'POST',
-          body: {
-            slotId: slot.id,
-            ...(childName ? { childName } : {}),
-            ...(paymentPartnerId ? { paymentPartnerId } : {}),
-            lessonDate: slot.lessonDate,
-          },
-        });
+        await api('/recurring', { method: 'POST', body });
+        return;
       }
+      await api('/bookings', { method: 'POST', body });
     },
     onSuccess: (_d, { slot, recurring, childName }) => {
-      toast(recurring ? 'Booked! Weekly spot requested.' : 'Lesson booked!');
-      setCalendarTarget({
-        teacherName: data?.teacher?.fullName || 'your instructor',
-        childName: childName || null,
-        lessonDate: slot.lessonDate,
-        startTime: slot.startTime,
-        durationMin: slot.durationMin,
-        subtitle: `${fmtDate(slot.lessonDate, { weekday: 'short', month: 'short', day: 'numeric' })} · ${fmtTimeRange(slot.startTime, slot.durationMin)}`,
-      });
+      toast(
+        recurring
+          ? 'Request sent. This time stays pending until your instructor responds.'
+          : 'Lesson booked!',
+      );
+      if (!recurring) {
+        setCalendarTarget({
+          teacherName: data?.teacher?.fullName || 'your instructor',
+          childName: childName || null,
+          lessonDate: slot.lessonDate,
+          startTime: slot.startTime,
+          durationMin: slot.durationMin,
+          subtitle: `${fmtDate(slot.lessonDate, { weekday: 'short', month: 'short', day: 'numeric' })} · ${fmtTimeRange(slot.startTime, slot.durationMin)}`,
+        });
+      }
       setSelected(null);
       setWantsRecurring(false);
       setSelectedChild(null);
@@ -210,7 +207,7 @@ export default function InstructorSchedule() {
   const selectSlot = (slot) => {
     if (!isSlotBookable(slot)) return;
     if (!user) {
-      navigate('/student/login', { state: { from: location } });
+      navigate('/login', { state: { from: location } });
       return;
     }
     if (user.role === 'teacher' && user.id === Number(teacherId)) {
@@ -223,7 +220,7 @@ export default function InstructorSchedule() {
         navigate('/profile');
         return;
       }
-      navigate('/student/login', { state: { from: location } });
+      navigate('/login', { state: { from: location } });
       return;
     }
     setSelected(slot);
@@ -241,16 +238,16 @@ export default function InstructorSchedule() {
     if (past) return 'Already passed';
     if (slot.mine && slot.status === 'recurring') return 'Your weekly spot';
     if (slot.mine && slot.status === 'booked') return 'Booked by you';
-    if (slot.mine && slot.status === 'pending') return 'Weekly spot pending';
+    if (slot.mine && slot.status === 'pending') return 'Your weekly request';
     if (slot.bookedByPartner) {
       const who = partnerSlotName(slot);
       if (slot.status === 'recurring') return `Weekly · ${who}`;
       if (slot.status === 'booked') return `Booked by ${who}`;
-      if (slot.status === 'pending') return `Pending · ${who}`;
+      if (slot.status === 'pending') return `Weekly request · ${who}`;
     }
     if (slot.status === 'recurring') return 'Weekly · reserved';
     if (slot.status === 'booked') return 'Booked';
-    if (slot.status === 'pending') return 'Pending';
+    if (slot.status === 'pending') return 'Weekly request pending';
     if (slot.status === 'invited') return slot.mine ? 'Scheduled for you' : 'Held';
     if (slot.status === 'unavailable') return 'Unavailable';
     return '';
@@ -278,8 +275,8 @@ export default function InstructorSchedule() {
             </>
           ) : (
             <>
-              <Link to="/student/login" state={{ from: location }}>
-                Log in as a student
+              <Link to="/login" state={{ from: location }}>
+                Log in
               </Link>{' '}
               to book a lesson.
             </>
@@ -410,11 +407,18 @@ export default function InstructorSchedule() {
 
       {selected && (
         <div className="card confirm-lesson" ref={confirmRef}>
-          <div className="section-title">Confirm your lesson</div>
+          <div className="section-title">
+            {wantsRecurring ? 'Request a weekly spot' : 'Confirm your lesson'}
+          </div>
           <p style={{ fontSize: '14px', marginBottom: '0.75rem' }}>
             <strong>{WEEKDAYS[selected.weekday]}</strong>, {fmtDate(selected.lessonDate)} ·{' '}
             {fmtTimeRange(selected.startTime, selected.durationMin)}
           </p>
+          {wantsRecurring && (
+            <p className="request-note">
+              Nothing is booked until your instructor responds. They can accept every week, book this date only, or decline.
+            </p>
+          )}
           {isParent && selectedChild && (
             <p className="muted" style={{ fontSize: '13px', marginBottom: '0.75rem' }}>
               Registering: <strong>{selectedChild}</strong>
@@ -433,8 +437,8 @@ export default function InstructorSchedule() {
             <div className={`recurring-toggle${wantsRecurring ? ' active' : ''}`}>
               <div className="recurring-toggle-row" onClick={() => setWantsRecurring((v) => !v)}>
                 <div className="recurring-toggle-label">
-                  <strong>Make this a weekly spot</strong>
-                  <span>Weekly from this week forward</span>
+                  <strong>Request this every week</strong>
+                  <span>Sends a request. You are not booked until your instructor accepts.</span>
                 </div>
                 <button
                   type="button"
@@ -467,14 +471,24 @@ export default function InstructorSchedule() {
               disabled={bookMutation.isPending}
             >
               {bookMutation.isPending
-                ? 'Booking…'
+                ? wantsRecurring
+                  ? 'Requesting…'
+                  : 'Booking…'
                 : isParent && !selectedChild
-                  ? 'Choose child & book'
+                  ? wantsRecurring
+                    ? 'Choose child & request'
+                    : 'Choose child & book'
                   : partners.length && selectedPaymentPartnerId === undefined
-                    ? 'Choose partner & book'
-                    : isParent && selectedChild
-                      ? `Book for ${selectedChild}`
-                      : `Book ${fmtTime(selected.startTime)}`}
+                    ? wantsRecurring
+                      ? 'Choose partner & request'
+                      : 'Choose partner & book'
+                    : wantsRecurring
+                      ? isParent && selectedChild
+                        ? `Request for ${selectedChild}`
+                        : 'Request weekly spot'
+                      : isParent && selectedChild
+                        ? `Book for ${selectedChild}`
+                        : `Book ${fmtTime(selected.startTime)}`}
             </button>
           </div>
         </div>

@@ -133,29 +133,140 @@ export async function sendBookingConfirmation({ student, teacher, slot, lessonDa
   });
 }
 
-export async function sendRecurringApproved({ student, teacher, slot, childName }) {
+const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function weeklyWhen(slot) {
+  return `Every ${WEEKDAY_NAMES[slot.weekday]} at ${formatTime(slot.start_time)} (${slot.duration_min} min)`;
+}
+
+export async function sendRecurringApproved({ student, teacher, slot, childName, startsOn }) {
   if (!studentWantsEmail(student)) return;
 
-  const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const forLine = childName ? ` for ${childName}` : '';
+  const startLine = startsOn ? ` Starting ${startsOn}.` : '';
   const subject = 'Your weekly lesson spot is confirmed';
   const body = [
     `Hi ${student.full_name},`,
     '',
-    `${teacher.full_name} approved your weekly spot${forLine}:`,
-    `Every ${weekdays[slot.weekday]} at ${formatTime(slot.start_time)} (${slot.duration_min} min).`,
+    `${teacher.full_name} accepted your weekly spot${forLine}:`,
+    `${weeklyWhen(slot)}.${startLine}`,
     '',
     `This time is now yours each week. View it any time: ${env.clientUrl}/my-lessons`,
   ].join('\n');
   const text = body + emailFooterText();
   const html = [
     `<p>Hi ${student.full_name},</p>`,
-    `<p>${teacher.full_name} approved your weekly spot${forLine}:</p>`,
-    `<p>Every ${weekdays[slot.weekday]} at ${formatTime(slot.start_time)} (${slot.duration_min} min).</p>`,
+    `<p>${teacher.full_name} accepted your weekly spot${forLine}:</p>`,
+    `<p>${weeklyWhen(slot)}.${startLine}</p>`,
     `<p>This time is now yours each week. <a href="${env.clientUrl}/my-lessons">View your lessons</a></p>`,
     emailFooterHtml(),
   ].join('');
   await sendEmail({ to: student.email, subject, text, html });
+}
+
+export async function sendWeeklySpotRequested({ teacher, student, slot, lessonDate, childName }) {
+  if (!teacherWantsEmail(teacher)) return;
+
+  const forLine = childName ? ` for ${childName}` : '';
+  const who = childName ? `${childName} (${student.full_name})` : student.full_name;
+  const subject = `Weekly spot request from ${who}`;
+  const scheduleUrl = `${env.clientUrl}/teacher`;
+  const body = [
+    `Hi ${teacher.full_name},`,
+    '',
+    `${student.full_name} requested a weekly spot${forLine}.`,
+    `${weeklyWhen(slot)}, starting ${lessonDate}.`,
+    '',
+    'Nothing is booked yet. On your schedule you can accept every week, book this date only, or decline.',
+    scheduleUrl,
+  ].join('\n');
+  const text = body + emailFooterText();
+  const html = [
+    `<p>Hi ${teacher.full_name},</p>`,
+    `<p>${student.full_name} requested a weekly spot${forLine}.</p>`,
+    `<p>${weeklyWhen(slot)}, starting ${lessonDate}.</p>`,
+    `<p>Nothing is booked yet. On your schedule you can accept every week, book this date only, or decline.</p>`,
+    `<p><a href="${scheduleUrl}">Open your schedule</a></p>`,
+    emailFooterHtml(),
+  ].join('');
+  await sendEmail({ to: teacher.email, subject, text, html });
+}
+
+export async function sendWeeklySpotDeclined({ student, teacher, slot, lessonDate, childName }) {
+  if (!studentWantsEmail(student)) return;
+
+  const forLine = childName ? ` for ${childName}` : '';
+  const subject = 'Weekly spot request declined';
+  const body = [
+    `Hi ${student.full_name},`,
+    '',
+    `${teacher.full_name} declined your weekly spot request${forLine}.`,
+    `${weeklyWhen(slot)}, starting ${lessonDate}.`,
+    '',
+    'No lesson was booked. You can choose another time:',
+    `${env.clientUrl}/my-lessons`,
+  ].join('\n');
+  const text = body + emailFooterText();
+  const html = [
+    `<p>Hi ${student.full_name},</p>`,
+    `<p>${teacher.full_name} declined your weekly spot request${forLine}.</p>`,
+    `<p>${weeklyWhen(slot)}, starting ${lessonDate}.</p>`,
+    `<p>No lesson was booked. <a href="${env.clientUrl}/my-lessons">View your lessons</a></p>`,
+    emailFooterHtml(),
+  ].join('');
+  await sendEmail({ to: student.email, subject, text, html });
+}
+
+export async function sendWeeklySpotOneTime({ student, teacher, slot, lessonDate, childName }) {
+  if (!studentWantsEmail(student)) return;
+
+  const forLine = childName ? ` for ${childName}` : '';
+  const { manageUrl, googleUrl, ics } = lessonCalendarPayload({
+    teacher,
+    slot,
+    lessonDate,
+    childName,
+  });
+  const subject = `Single lesson confirmed: ${lessonDate} at ${formatTime(slot.start_time)}`;
+  const body = [
+    `Hi ${student.full_name},`,
+    '',
+    `${teacher.full_name} booked one lesson${forLine} instead of the weekly spot.`,
+    `Date: ${lessonDate}`,
+    `Time: ${formatTime(slot.start_time)} (${slot.duration_min} min)`,
+    '',
+    'The other weeks of this time are not reserved.',
+    '',
+    `Add to Google Calendar: ${googleUrl}`,
+    '(A calendar invite file is also attached for Apple Calendar, Outlook, and others.)',
+    '',
+    `Manage your lessons: ${manageUrl}`,
+  ].join('\n');
+  const text = body + emailFooterText();
+  const html = [
+    `<p>Hi ${student.full_name},</p>`,
+    `<p>${teacher.full_name} booked one lesson${forLine} instead of the weekly spot.</p>`,
+    `<p><strong>Date:</strong> ${lessonDate}<br>`,
+    `<strong>Time:</strong> ${formatTime(slot.start_time)} (${slot.duration_min} min)</p>`,
+    `<p>The other weeks of this time are not reserved.</p>`,
+    `<p><a href="${googleUrl}">Add to Google Calendar</a><br>`,
+    `<span style="font-size:13px;color:#666;">A .ics attachment is included for Apple Calendar, Outlook, and others.</span></p>`,
+    `<p><a href="${manageUrl}">Manage your lessons</a></p>`,
+    emailFooterHtml(),
+  ].join('');
+  await sendEmail({
+    to: student.email,
+    subject,
+    text,
+    html,
+    attachments: [
+      {
+        filename: `lesson-${lessonDate}.ics`,
+        content: ics,
+        contentType: 'text/calendar; charset=utf-8',
+      },
+    ],
+  });
 }
 
 export async function sendReminder({ student, teacher, slot, lessonDate, childName }) {
@@ -207,8 +318,8 @@ export async function sendReminder({ student, teacher, slot, lessonDate, childNa
   });
 }
 
-export async function sendPasswordReset({ email, fullName, role, token }) {
-  const resetUrl = `${env.clientUrl}/${role}/reset-password?token=${token}`;
+export async function sendPasswordReset({ email, fullName, token }) {
+  const resetUrl = `${env.clientUrl}/reset-password?token=${token}`;
   const expiresLabel = env.passwordResetExpiresHours === 1
     ? '1 hour'
     : `${env.passwordResetExpiresHours} hours`;

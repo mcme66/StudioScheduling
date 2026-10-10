@@ -378,8 +378,15 @@ export default function TeacherDashboard() {
 
   const decide = useMutation({
     mutationFn: ({ id, action }) => api(`/recurring/${id}/${action}`, { method: 'POST' }),
-    onSuccess: (_d, { action }) => {
-      toast(action === 'approve' ? 'Weekly spot approved.' : 'Request declined.');
+    onSuccess: (data, { action }) => {
+      const messages = {
+        approve: data?.startsOn
+          ? `Weekly spot accepted, starting ${fmtDate(data.startsOn, { month: 'short', day: 'numeric' })}.`
+          : 'Weekly spot accepted. They have this time every week.',
+        'one-time': 'Booked this date only. The other weeks are open.',
+        decline: 'Request declined. Nothing was booked.',
+      };
+      toast(messages[action] || 'Request updated.');
       invalidateAll();
     },
     onError: (err) => toast(err.message),
@@ -491,41 +498,59 @@ export default function TeacherDashboard() {
       {/* Pending weekly-spot requests */}
       {pendingQuery.data?.pending?.length > 0 && (
         <div className="card" style={{ borderColor: '#f0c090', borderWidth: 2 }}>
-          <div className="section-title">⏳ Weekly spot requests</div>
-          {pendingQuery.data.pending.map((p) => (
-            <div className="list-row" key={p.id}>
-              <div className="when">
-                <div className="d">{WEEKDAYS[p.weekday]}</div>
-                <div>
-                  {fmtTimeRange(p.startTime, p.durationMin)}
-                  {p.firstLessonDate && (
-                    <div className="muted" style={{ fontSize: '11px', marginTop: '2px' }}>
-                      First lesson {fmtDate(p.firstLessonDate, { month: 'short', day: 'numeric' })}
+          <div className="section-title">Weekly spot requests</div>
+          <p className="request-note">
+            Nothing is booked yet. Accept every week from the requested date, book that date only, or decline.
+          </p>
+          {pendingQuery.data.pending.map((p) => {
+            const startPassed = p.firstLessonDate && isSlotPast(p.firstLessonDate, p.startTime);
+            return (
+              <div className="weekly-request" key={p.id}>
+                <div className="list-row">
+                  <div className="when">
+                    <div className="d">Every {WEEKDAYS[p.weekday]}</div>
+                    <div>
+                      {fmtTimeRange(p.startTime, p.durationMin)}
+                      {p.firstLessonDate && (
+                        <div className="muted" style={{ fontSize: '11px', marginTop: '2px' }}>
+                          Starting {fmtDate(p.firstLessonDate, { month: 'short', day: 'numeric' })}
+                          {startPassed ? ' · that date has passed' : ''}
+                        </div>
+                      )}
                     </div>
-                  )}
+                  </div>
+                  <StudentLessonInfo student={p.student} paymentPartner={p.paymentPartner} />
+                </div>
+                <div className="request-actions">
+                  <button
+                    type="button"
+                    className="btn btn-green btn-sm"
+                    onClick={() => decide.mutate({ id: p.id, action: 'approve' })}
+                    disabled={decide.isPending}
+                  >
+                    Accept weekly
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    title={startPassed ? 'That date has already passed' : 'Book only the requested date'}
+                    onClick={() => decide.mutate({ id: p.id, action: 'one-time' })}
+                    disabled={decide.isPending || startPassed}
+                  >
+                    This date only
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => decide.mutate({ id: p.id, action: 'decline' })}
+                    disabled={decide.isPending}
+                  >
+                    Decline
+                  </button>
                 </div>
               </div>
-              <StudentLessonInfo student={p.student} paymentPartner={p.paymentPartner} />
-              <div className="row" style={{ gap: '0.4rem' }}>
-                <button
-                  type="button"
-                  className="btn btn-green btn-sm"
-                  onClick={() => decide.mutate({ id: p.id, action: 'approve' })}
-                  disabled={decide.isPending}
-                >
-                  Approve
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  onClick={() => decide.mutate({ id: p.id, action: 'decline' })}
-                  disabled={decide.isPending}
-                >
-                  Decline
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

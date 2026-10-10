@@ -511,7 +511,7 @@ teachersRouter.get(
         status = 'unavailable';
       } else if (exceptionKind === 'skipped') {
         // Weekly holder is away this week; the slot reopens unless someone
-        // already booked the freed date.
+        // already booked the freed date or a new weekly request covers it.
         if (bk) {
           status = 'booked';
           mine = meId != null && bk.student_id === meId;
@@ -519,6 +519,10 @@ teachersRouter.get(
         } else if (inv) {
           status = 'invited';
           mine = meId != null && inv.student_id === meId;
+        } else if (pend) {
+          status = 'pending';
+          mine = meId != null && pend.student_id === meId;
+          bookedByPartner = partnerLabel(pend);
         }
       } else if (rec) {
         status = 'recurring';

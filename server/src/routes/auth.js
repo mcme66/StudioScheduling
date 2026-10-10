@@ -34,18 +34,18 @@ const registerSchema = z.object({
 });
 
 const loginSchema = z.object({
-  role: z.enum(['student', 'teacher']),
+  role: z.enum(['student', 'teacher']).optional(),
   email: z.string().email().transform((v) => v.toLowerCase().trim()),
   password: z.string().min(1),
 });
 
 const forgotPasswordSchema = z.object({
-  role: z.enum(['student', 'teacher']),
+  role: z.enum(['student', 'teacher']).optional(),
   email: z.string().email().transform((v) => v.toLowerCase().trim()),
 });
 
 const resetPasswordSchema = z.object({
-  role: z.enum(['student', 'teacher']),
+  role: z.enum(['student', 'teacher']).optional(),
   token: z.string().min(1),
   password: z.string().min(8, 'Password must be at least 8 characters.'),
 });
@@ -113,6 +113,34 @@ function publicUser(row, role) {
         }
       : {}),
   };
+}
+
+async function findAccountsByEmail(email) {
+  const accounts = [];
+  const { rows: teachers } = await query('SELECT * FROM teachers WHERE email = $1', [email]);
+  if (teachers[0]) accounts.push({ row: teachers[0], role: 'teacher', table: 'teachers' });
+
+  const { rows: owners } = await query(
+    `SELECT so.*, s.name AS studio_name, s.slug AS studio_slug
+       FROM studio_owners so
+       JOIN studios s ON s.id = so.studio_id
+      WHERE so.email = $1`,
+    [email],
+  );
+  if (owners[0]) accounts.push({ row: owners[0], role: 'studio_owner', table: 'studio_owners' });
+
+  const { rows: students } = await query('SELECT * FROM students WHERE email = $1', [email]);
+  if (students[0]) accounts.push({ row: students[0], role: 'student', table: 'students' });
+  return accounts;
+}
+
+function preferAccount(accounts) {
+  return (
+    accounts.find((account) => account.role === 'teacher') ||
+    accounts.find((account) => account.role === 'studio_owner') ||
+    accounts[0] ||
+    null
+  );
 }
 
 async function findTeacherOrOwnerByEmail(email) {
@@ -274,16 +302,24 @@ authRouter.post(
   asyncHandler(async (req, res) => {
     const data = loginSchema.parse(req.body);
 
-    let match;
+    let candidates = [];
     if (data.role === 'teacher') {
-      match = await findTeacherOrOwnerByEmail(data.email);
-    } else {
-      const table = ROLE_TABLE[data.role];
+      const match = await findTeacherOrOwnerByEmail(data.email);
+      if (match) candidates = [match];
+    } else if (data.role === 'student') {
+      const table = ROLE_TABLE.student;
       const { rows } = await query(`SELECT * FROM ${table} WHERE email = $1`, [data.email]);
-      if (rows[0]) match = { row: rows[0], role: data.role, table };
+      if (rows[0]) candidates = [{ row: rows[0], role: 'student', table }];
+    } else {
+      candidates = await findAccountsByEmail(data.email);
     }
 
-    if (!match || !(await bcrypt.compare(data.password, match.row.password_hash))) {
+    const matches = [];
+    for (const candidate of candidates) {
+      if (await bcrypt.compare(data.password, candidate.row.password_hash)) matches.push(candidate);
+    }
+    const match = preferAccount(matches);
+    if (!match) {
       throw new HttpError(401, 'Incorrect email or password.');
     }
     const user = publicUser(match.row, match.role);
@@ -305,12 +341,14 @@ authRouter.post(
     let found;
     if (data.role === 'teacher') {
       found = await findTeacherOrOwnerByEmail(data.email);
-    } else {
-      const table = ROLE_TABLE[data.role];
+    } else if (data.role === 'student') {
+      const table = ROLE_TABLE.student;
       const { rows } = await query(`SELECT id, email, full_name FROM ${table} WHERE email = $1`, [
         data.email,
       ]);
-      if (rows[0]) found = { row: rows[0], table, role: data.role };
+      if (rows[0]) found = { row: rows[0], table, role: 'student' };
+    } else {
+      found = preferAccount(await findAccountsByEmail(data.email));
     }
 
     if (found) {
@@ -328,7 +366,6 @@ authRouter.post(
       await sendPasswordReset({
         email: found.row.email,
         fullName: found.row.full_name,
-        role: data.role,
         token,
       });
     }
@@ -344,7 +381,11 @@ authRouter.post(
     const tokenHash = hashResetToken(data.token);
 
     const tables =
-      data.role === 'teacher' ? ['teachers', 'studio_owners'] : [ROLE_TABLE[data.role]];
+      data.role === 'teacher'
+        ? ['teachers', 'studio_owners']
+        : data.role === 'student'
+          ? ['students']
+          : ['teachers', 'studio_owners', 'students'];
 
     let row;
     let table;
