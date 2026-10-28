@@ -22,6 +22,7 @@ export default function Profile() {
     queryFn: () => api('/teachers/me'),
     enabled: isTeacher,
   });
+  const teacherManaged = teacherQuery.data?.teacher?.ownerManaged === true;
   const studentQuery = useQuery({
     queryKey: ['student-profile'],
     queryFn: () => api('/students/me'),
@@ -120,7 +121,7 @@ export default function Profile() {
           body: {
             fullName: form.fullName,
             phone: form.phone || '',
-            bio: form.bio || '',
+            ...(teacherManaged ? {} : { bio: form.bio || '' }),
             defaultPriceCents: Math.round(Number(form.defaultPrice || 0) * 100),
             defaultDurationMin: Number(form.defaultDurationMin || 45),
             trackPayments: form.trackPayments,
@@ -443,7 +444,18 @@ export default function Profile() {
               </div>
               <div className="field">
                 <label>Short bio (optional)</label>
-                <textarea rows={3} value={form.bio} onChange={update('bio')} />
+                {teacherManaged ? (
+                  <>
+                    <p style={{ fontSize: '14px', margin: 0 }}>
+                      {form.bio || <span className="muted">No bio yet.</span>}
+                    </p>
+                    <p className="muted" style={{ fontSize: '12px', marginTop: '4px' }}>
+                      Your studio manages your bio.
+                    </p>
+                  </>
+                ) : (
+                  <textarea rows={3} value={form.bio} onChange={update('bio')} />
+                )}
               </div>
               <div className="row" style={{ gap: '0.75rem' }}>
                 <div className="field" style={{ flex: 1 }}>

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db.js';
+import { sanitizeRichText } from '../utils/sanitizeHtml.js';
 import {
   assignCoachTier,
   createCoachTier,
@@ -302,6 +303,75 @@ ownerRouter.patch(
     );
     if (!rowCount) throw new HttpError(404, 'That coach is not at your studio.');
     res.json({ ok: true, ownerManaged: managed });
+  }),
+);
+
+const coachProfileSchema = z.object({
+  bio: z.string().max(1000).optional().or(z.literal('')),
+  additionalInfo: z.string().max(15000).optional().or(z.literal('')),
+  teachingPolicies: z.string().max(15000).optional().or(z.literal('')),
+});
+
+function mapCoachProfile(row) {
+  return {
+    bio: row.bio || null,
+    additionalInfo: row.additional_info || null,
+    teachingPolicies: row.teaching_policies || null,
+  };
+}
+
+async function managedCoachId(req) {
+  const teacherId = Number(req.params.teacherId);
+  if (!Number.isInteger(teacherId) || teacherId <= 0) {
+    throw new HttpError(400, 'Invalid coach.');
+  }
+  const studioId = await ownerStudioId(req.user.id);
+  const { rows } = await query(
+    'SELECT owner_managed FROM teacher_studios WHERE teacher_id = $1 AND studio_id = $2',
+    [teacherId, studioId],
+  );
+  if (!rows[0]) throw new HttpError(404, 'That coach is not at your studio.');
+  if (rows[0].owner_managed !== true) {
+    throw new HttpError(403, 'Turn on Manage before editing this coach’s profile.');
+  }
+  return teacherId;
+}
+
+ownerRouter.get(
+  '/teachers/:teacherId/profile',
+  asyncHandler(async (req, res) => {
+    const teacherId = await managedCoachId(req);
+    const { rows } = await query(
+      'SELECT bio, additional_info, teaching_policies FROM teachers WHERE id = $1',
+      [teacherId],
+    );
+    res.json({ profile: mapCoachProfile(rows[0]) });
+  }),
+);
+
+ownerRouter.patch(
+  '/teachers/:teacherId/profile',
+  asyncHandler(async (req, res) => {
+    const teacherId = await managedCoachId(req);
+    const data = coachProfileSchema.parse(req.body);
+    const columns = { bio: 'bio', additionalInfo: 'additional_info', teachingPolicies: 'teaching_policies' };
+    const sets = [];
+    const values = [];
+    for (const [key, column] of Object.entries(columns)) {
+      if (data[key] === undefined) continue;
+      let value = data[key] === '' ? null : data[key];
+      if (key !== 'bio' && value != null) value = sanitizeRichText(value);
+      values.push(value);
+      sets.push(`${column} = $${values.length}`);
+    }
+    if (!sets.length) throw new HttpError(400, 'Nothing to update.');
+    values.push(teacherId);
+    const { rows } = await query(
+      `UPDATE teachers SET ${sets.join(', ')} WHERE id = $${values.length}
+       RETURNING bio, additional_info, teaching_policies`,
+      values,
+    );
+    res.json({ profile: mapCoachProfile(rows[0]) });
   }),
 );
 

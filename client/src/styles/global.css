@@ -252,6 +252,42 @@ a:hover {
 .times-split {
   grid-template-columns: minmax(0, 1.22fr) minmax(0, 0.78fr);
 }
+
+/* Owner editing a managed coach: bio and schedule cards under the dashboard. */
+.owner-coach-profile {
+  width: min(1760px, calc(100vw - 3rem));
+  margin-left: calc(50% - min(1760px, calc(100vw - 3rem)) / 2);
+  margin-bottom: 1.25rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.25rem;
+  align-items: start;
+}
+.owner-coach-profile > .card + .card {
+  margin-top: 0;
+}
+.coach-bio-input {
+  width: 100%;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--paper);
+  color: var(--ink);
+  resize: vertical;
+}
+.coach-bio-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+@media (max-width: 900px) {
+  .owner-coach-profile {
+    width: auto;
+    margin-left: 0;
+    grid-template-columns: 1fr;
+  }
+}
 @media (min-width: 1025px) {
   .times-split .open-times-card {
     position: sticky;

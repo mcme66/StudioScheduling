@@ -84,6 +84,16 @@ export default function InstructorSchedule() {
     enabled: !!canBook,
   });
   const partners = partnersQuery.data?.partners || [];
+  const viewingOwnSchedule = user?.role === 'teacher' && user.id === Number(teacherId);
+  const ownProfileQuery = useQuery({
+    queryKey: ['teacher-profile'],
+    queryFn: () => api('/teachers/me'),
+    enabled: viewingOwnSchedule,
+  });
+  const canEditInfo =
+    viewingOwnSchedule &&
+    ownProfileQuery.isSuccess &&
+    ownProfileQuery.data?.teacher?.ownerManaged !== true;
 
   // If the current week has no bookable slots left, jump ahead to the next week.
   useEffect(() => {
@@ -253,7 +263,7 @@ export default function InstructorSchedule() {
     return '';
   };
 
-  const isOwner = user?.role === 'teacher' && user.id === Number(teacherId);
+  const isOwner = viewingOwnSchedule;
 
   return (
     <div className="container schedule-page">
@@ -290,7 +300,7 @@ export default function InstructorSchedule() {
             title="Additional Information"
             field="additionalInfo"
             html={data?.teacher?.additionalInfo}
-            editable={isOwner}
+            editable={canEditInfo}
             onSaved={() => queryClient.invalidateQueries({ queryKey })}
           />
         </aside>
@@ -570,7 +580,7 @@ export default function InstructorSchedule() {
             title="Teaching Policies"
             field="teachingPolicies"
             html={data?.teacher?.teachingPolicies}
-            editable={isOwner}
+            editable={canEditInfo}
             onSaved={() => queryClient.invalidateQueries({ queryKey })}
           />
         </aside>

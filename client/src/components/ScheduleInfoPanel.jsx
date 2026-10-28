@@ -5,7 +5,15 @@ import { useToast } from './Toast.jsx';
 import RichTextEditor from './RichTextEditor.jsx';
 import RichTextDisplay from './RichTextDisplay.jsx';
 
-export default function ScheduleInfoPanel({ title, field, html, editable, onSaved }) {
+export default function ScheduleInfoPanel({
+  title,
+  field,
+  html,
+  editable,
+  onSaved,
+  saveUrl = '/teachers/me',
+  className = 'card schedule-info-panel',
+}) {
   const toast = useToast();
   const [draft, setDraft] = useState(html || '');
   const [dirty, setDirty] = useState(false);
@@ -16,7 +24,7 @@ export default function ScheduleInfoPanel({ title, field, html, editable, onSave
   }, [html]);
 
   const save = useMutation({
-    mutationFn: (body) => api('/teachers/me', { method: 'PATCH', body }),
+    mutationFn: (body) => api(saveUrl, { method: 'PATCH', body }),
     onSuccess: () => {
       toast('Saved.');
       setDirty(false);
@@ -31,7 +39,7 @@ export default function ScheduleInfoPanel({ title, field, html, editable, onSave
   };
 
   return (
-    <div className="card schedule-info-panel">
+    <div className={className}>
       <div className="section-title">{title}</div>
       {editable ? (
         <>

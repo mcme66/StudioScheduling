@@ -112,11 +112,38 @@ teachersRouter.put(
   }),
 );
 
+const STUDIO_MANAGED_PROFILE_FIELDS = {
+  bio: 'bio',
+  additionalInfo: 'additional_info',
+  teachingPolicies: 'teaching_policies',
+};
+
+/** Managed coaches keep their bio and schedule cards as the studio set them. */
+async function stripStudioManagedFields(teacherId, data) {
+  const keys = Object.keys(STUDIO_MANAGED_PROFILE_FIELDS).filter((key) => data[key] !== undefined);
+  if (!keys.length || !(await isOwnerManaged(teacherId))) return;
+  const { rows } = await query('SELECT bio, additional_info, teaching_policies FROM teachers WHERE id = $1', [
+    teacherId,
+  ]);
+  const current = rows[0] || {};
+  for (const key of keys) {
+    const incoming = data[key] === '' ? null : data[key];
+    const existing = current[STUDIO_MANAGED_PROFILE_FIELDS[key]] ?? null;
+    const unchanged =
+      key === 'bio' ? (incoming ?? '') === (existing ?? '') : (incoming ? sanitizeRichText(incoming) : null) === existing;
+    if (!unchanged) {
+      throw new HttpError(403, 'Your studio manages your bio and schedule information.');
+    }
+    delete data[key];
+  }
+}
+
 teachersRouter.patch(
   '/me',
   requireRole('teacher'),
   asyncHandler(async (req, res) => {
     const data = profileSchema.parse(req.body);
+    await stripStudioManagedFields(req.user.id, data);
     const map = {
       fullName: 'full_name',
       phone: 'phone',

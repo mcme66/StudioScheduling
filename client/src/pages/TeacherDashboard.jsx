@@ -606,7 +606,7 @@ export default function TeacherDashboard({ ownerTeacher = null }) {
       </div>
 
       {/* Pending weekly-spot requests */}
-      {pendingQuery.data?.pending?.length > 0 && (
+      {!viewOnly && pendingQuery.data?.pending?.length > 0 && (
         <div className="card" style={{ borderColor: '#f0c090', borderWidth: 2 }}>
           <div className="section-title">Weekly spot requests</div>
           <p className="request-note">
@@ -631,39 +631,33 @@ export default function TeacherDashboard({ ownerTeacher = null }) {
                   </div>
                   <StudentLessonInfo student={p.student} paymentPartner={p.paymentPartner} />
                 </div>
-                {viewOnly ? (
-                  <span className="muted" style={{ fontSize: '13px' }}>
-                    The studio handles this request.
-                  </span>
-                ) : (
-                  <div className="request-actions">
-                    <button
-                      type="button"
-                      className="btn btn-green btn-sm"
-                      onClick={() => decide.mutate({ id: p.id, action: 'approve' })}
-                      disabled={decide.isPending}
-                    >
-                      Accept weekly
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm"
-                      title={startPassed ? 'That date has already passed' : 'Book only the requested date'}
-                      onClick={() => decide.mutate({ id: p.id, action: 'one-time' })}
-                      disabled={decide.isPending || startPassed}
-                    >
-                      This date only
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => decide.mutate({ id: p.id, action: 'decline' })}
-                      disabled={decide.isPending}
-                    >
-                      Decline
-                    </button>
-                  </div>
-                )}
+                <div className="request-actions">
+                  <button
+                    type="button"
+                    className="btn btn-green btn-sm"
+                    onClick={() => decide.mutate({ id: p.id, action: 'approve' })}
+                    disabled={decide.isPending}
+                  >
+                    Accept weekly
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    title={startPassed ? 'That date has already passed' : 'Book only the requested date'}
+                    onClick={() => decide.mutate({ id: p.id, action: 'one-time' })}
+                    disabled={decide.isPending || startPassed}
+                  >
+                    This date only
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => decide.mutate({ id: p.id, action: 'decline' })}
+                    disabled={decide.isPending}
+                  >
+                    Decline
+                  </button>
+                </div>
               </div>
             );
           })}
@@ -806,37 +800,47 @@ export default function TeacherDashboard({ ownerTeacher = null }) {
         </div>
         </div>
 
-        <div className="card open-times-card">
-          <div className="section-title">Open times · week of {weekRangeLabel(weekStart)}</div>
-          {scheduleQuery.isLoading && <div className="loading">Loading…</div>}
-          {scheduleQuery.data && (
-            <OpenTimesList
-              slots={openSlots}
-              pendingInvites={invitesQuery.data?.invites || []}
-              allowSchedule={!viewOnly}
-              onSchedule={(slot) =>
-                setDialog({
-                  type: 'scheduleStudent',
-                  slot,
-                  email: '',
-                  error: '',
-                  student: null,
-                  childName: '',
-                })
-              }
-              onCancelInvite={(id) => cancelInvite.mutate(id)}
-              cancelPending={cancelInvite.isPending}
-            />
-          )}
-        </div>
+        {viewOnly ? (
+          <SharePanel
+            teacherId={teacherId}
+            studios={studios}
+            openSlots={openUpcoming}
+            weekLabel={weekRangeLabel(weekStart)}
+          />
+        ) : (
+          <div className="card open-times-card">
+            <div className="section-title">Open times · week of {weekRangeLabel(weekStart)}</div>
+            {scheduleQuery.isLoading && <div className="loading">Loading…</div>}
+            {scheduleQuery.data && (
+              <OpenTimesList
+                slots={openSlots}
+                pendingInvites={invitesQuery.data?.invites || []}
+                onSchedule={(slot) =>
+                  setDialog({
+                    type: 'scheduleStudent',
+                    slot,
+                    email: '',
+                    error: '',
+                    student: null,
+                    childName: '',
+                  })
+                }
+                onCancelInvite={(id) => cancelInvite.mutate(id)}
+                cancelPending={cancelInvite.isPending}
+              />
+            )}
+          </div>
+        )}
       </div>
 
-      <SharePanel
-        teacherId={teacherId}
-        studios={studios}
-        openSlots={openUpcoming}
-        weekLabel={weekRangeLabel(weekStart)}
-      />
+      {!viewOnly && (
+        <SharePanel
+          teacherId={teacherId}
+          studios={studios}
+          openSlots={openUpcoming}
+          weekLabel={weekRangeLabel(weekStart)}
+        />
+      )}
 
       {dialog?.type === 'recurring' && (
         <Modal
@@ -1249,7 +1253,6 @@ function OpenTimesList({
   onSchedule,
   onCancelInvite,
   cancelPending,
-  allowSchedule = true,
 }) {
   const groups = [];
   const sorted = [...slots].sort(
@@ -1323,8 +1326,8 @@ function OpenTimesList({
                   <div>{fmtTimeRange(slot.startTime, slot.durationMin)}</div>
                 </div>
                 <div className="open-time-actions">
-                  {past || !allowSchedule ? (
-                    <span className="muted">{past ? 'Passed' : 'Studio schedules this'}</span>
+                  {past ? (
+                    <span className="muted">Passed</span>
                   ) : (
                     <button
                       type="button"
