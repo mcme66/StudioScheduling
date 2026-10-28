@@ -38,6 +38,7 @@ function rangeLabel(from, to) {
 }
 
 function compareCoaches(a, b, key, dir) {
+  if (a.ownerManaged !== b.ownerManaged) return a.ownerManaged ? -1 : 1;
   const sign = dir === 'asc' ? 1 : -1;
   if (key === 'name') return a.fullName.localeCompare(b.fullName) * sign;
   if (key === 'lessons') return (a.lessonCount - b.lessonCount) * sign;
