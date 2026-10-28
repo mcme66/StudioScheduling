@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/client.js';
+import { useToast } from '../Toast.jsx';
 import { fmtDate, fmtPrice } from '../../lib/format.js';
 
 const PRESETS = [
@@ -49,8 +50,155 @@ function compareCoaches(a, b, key, dir) {
   return aDate.localeCompare(bDate) * sign;
 }
 
+function TiersEditor() {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const studioQuery = useQuery({
+    queryKey: ['owner-studio'],
+    queryFn: () => api('/owner/studio'),
+  });
+  const [form, setForm] = useState({ name: '', description: '' });
+  const [editingId, setEditingId] = useState(null);
+  const tiers = studioQuery.data?.tiers || [];
+
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ['owner-studio'] });
+    queryClient.invalidateQueries({ queryKey: ['owner-coaches'] });
+  };
+
+  const saveTier = useMutation({
+    mutationFn: () => {
+      const body = { name: form.name.trim(), description: form.description.trim() };
+      if (editingId) return api(`/owner/tiers/${editingId}`, { method: 'PATCH', body });
+      return api('/owner/tiers', { method: 'POST', body });
+    },
+    onSuccess: () => {
+      setForm({ name: '', description: '' });
+      setEditingId(null);
+      refresh();
+    },
+    onError: (err) => toast(err.message),
+  });
+
+  const removeTier = useMutation({
+    mutationFn: (id) => api(`/owner/tiers/${id}`, { method: 'DELETE' }),
+    onSuccess: refresh,
+    onError: (err) => toast(err.message),
+  });
+
+  const moveTier = useMutation({
+    mutationFn: ({ id, direction }) =>
+      api(`/owner/tiers/${id}/move`, { method: 'POST', body: { direction } }),
+    onSuccess: refresh,
+    onError: (err) => toast(err.message),
+  });
+
+  return (
+    <div className="card" style={{ marginBottom: '1rem' }}>
+      <div className="section-title">Coach tiers</div>
+      <p className="muted" style={{ fontSize: '14px' }}>
+        Up to 5 tiers. The public studio page groups coaches under these names.
+      </p>
+      {tiers.map((tier, index) => (
+        <div className="list-row" key={tier.id}>
+          <div className="grow">
+            <strong>{tier.name}</strong>
+            {tier.description && <div className="contact">{tier.description}</div>}
+          </div>
+          <div className="row" style={{ gap: '0.35rem' }}>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={index === 0 || moveTier.isPending}
+              onClick={() => moveTier.mutate({ id: tier.id, direction: 'up' })}
+            >
+              Up
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={index === tiers.length - 1 || moveTier.isPending}
+              onClick={() => moveTier.mutate({ id: tier.id, direction: 'down' })}
+            >
+              Down
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => {
+                setEditingId(tier.id);
+                setForm({ name: tier.name, description: tier.description || '' });
+              }}
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={removeTier.isPending}
+              onClick={() => removeTier.mutate(tier.id)}
+            >
+              Remove
+            </button>
+          </div>
+        </div>
+      ))}
+      {tiers.length < 5 && (
+        <form
+          className="stack"
+          style={{ marginTop: '0.75rem' }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!form.name.trim()) return;
+            saveTier.mutate();
+          }}
+        >
+          <div className="field">
+            <label htmlFor="tier-name">{editingId ? 'Tier name' : 'New tier'}</label>
+            <input
+              id="tier-name"
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              maxLength={80}
+              required
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="tier-description">Description</label>
+            <input
+              id="tier-description"
+              value={form.description}
+              onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+              maxLength={240}
+            />
+          </div>
+          <div className="row" style={{ gap: '0.4rem' }}>
+            <button type="submit" className="btn btn-primary btn-sm" disabled={saveTier.isPending}>
+              {editingId ? 'Save tier' : 'Add tier'}
+            </button>
+            {editingId && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => {
+                  setEditingId(null);
+                  setForm({ name: '', description: '' });
+                }}
+              >
+                Cancel
+              </button>
+            )}
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
 export default function CoachesTab() {
   const navigate = useNavigate();
+  const toast = useToast();
+  const queryClient = useQueryClient();
   const [params, setParams] = useSearchParams();
   const requested = params.get('preset');
   const preset = PRESETS.some((p) => p.id === requested) ? requested : 'week';
@@ -89,8 +237,35 @@ export default function CoachesTab() {
   };
 
   const data = coachesQuery.data;
+  const studioQuery = useQuery({
+    queryKey: ['owner-studio'],
+    queryFn: () => api('/owner/studio'),
+  });
+  const tiers = studioQuery.data?.tiers || [];
+
+  const setManaged = useMutation({
+    mutationFn: ({ id, managed }) =>
+      api(`/owner/teachers/${id}/managed`, { method: 'PATCH', body: { managed } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['owner-coaches'] });
+      queryClient.invalidateQueries({ queryKey: ['owner-studio'] });
+    },
+    onError: (err) => toast(err.message),
+  });
+
+  const setTier = useMutation({
+    mutationFn: ({ id, tierId }) =>
+      api(`/owner/teachers/${id}/tier`, { method: 'PATCH', body: { tierId } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['owner-coaches'] });
+      queryClient.invalidateQueries({ queryKey: ['owner-studio'] });
+    },
+    onError: (err) => toast(err.message),
+  });
 
   return (
+    <>
+    <TiersEditor />
     <div className="card">
       <div className="coach-toolbar">
         <div className="quiet-presets" role="group" aria-label="Time period">
@@ -173,8 +348,52 @@ export default function CoachesTab() {
                     }}
                   >
                     <td>
-                      {coach.fullName}
-                      {!coach.isActive && <span className="contact"> Inactive</span>}
+                      <div>{coach.fullName}</div>
+                      {!coach.isActive && <div className="contact">Inactive</div>}
+                      {coach.tierName && <div className="contact">{coach.tierName}</div>}
+                      <div
+                        className="row"
+                        style={{ gap: '0.5rem', marginTop: '0.35rem', flexWrap: 'wrap' }}
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          className={`manage-toggle${coach.ownerManaged ? ' on' : ''}`}
+                          aria-pressed={coach.ownerManaged}
+                          disabled={setManaged.isPending}
+                          onClick={() => setManaged.mutate({ id: coach.id, managed: !coach.ownerManaged })}
+                        >
+                          <span className={`switch${coach.ownerManaged ? ' on' : ''}`} />
+                          Manage
+                        </button>
+                        {coach.ownerManaged && (
+                          <Link className="btn btn-ghost btn-sm" to={`/owner/coaches/${coach.id}/schedule`}>
+                            Schedule
+                          </Link>
+                        )}
+                        {tiers.length > 0 && (
+                          <select
+                            className="tier-assign"
+                            aria-label={`Tier for ${coach.fullName}`}
+                            value={coach.tierId || ''}
+                            disabled={setTier.isPending}
+                            onChange={(e) =>
+                              setTier.mutate({
+                                id: coach.id,
+                                tierId: e.target.value ? Number(e.target.value) : null,
+                              })
+                            }
+                          >
+                            <option value="">No tier</option>
+                            {tiers.map((tier) => (
+                              <option key={tier.id} value={tier.id}>
+                                {tier.name}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
                     </td>
                     <td>{coach.lastLessonDate ? fmtDate(coach.lastLessonDate, { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td>
                     <td className="num">{coach.lessonCount}</td>
@@ -187,6 +406,7 @@ export default function CoachesTab() {
         </div>
       )}
     </div>
+    </>
   );
 }
 

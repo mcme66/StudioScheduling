@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { query, withTransaction } from '../db.js';
 import { asyncHandler, HttpError } from '../middleware/error.js';
 import { requireAuth } from '../middleware/auth.js';
+import { isScheduleTeacher } from '../middleware/scheduleTeacher.js';
+import { assertCoachMayEdit, maybeRequestCancellation } from '../services/coachManagement.js';
 import {
   isValidDateStr,
   todayISO,
@@ -14,6 +16,7 @@ import { sendBookingConfirmation } from '../services/email.js';
 import { normalizeChildrenNames } from './students.js';
 import { resolveBookerStudentId } from '../utils/booker.js';
 import { loadSlotForUpdate, assertSlotOpenOnDate } from '../utils/assertSlotOpen.js';
+import { cancelActor, undoBookingCancellation } from '../utils/lessonCancel.js';
 import {
   partnerLinksFor,
   partnerCoversLesson,
@@ -153,7 +156,7 @@ bookingsRouter.get(
     const visibleIds = [bookerStudentId, ...new Set(links.map((l) => l.partnerId))];
 
     const { rows: bookings } = await query(
-      `SELECT b.id, b.lesson_date, b.status, b.created_at, b.paid, b.partner_paid, b.child_name,
+      `SELECT b.id, b.lesson_date, b.status, b.cancelled_by, b.created_at, b.paid, b.partner_paid, b.child_name,
               b.student_id, b.payment_partner_id,
               st.full_name AS booker_name, pp.full_name AS payment_partner_name,
               s.weekday, s.start_time, s.duration_min, s.price_cents,
@@ -163,7 +166,15 @@ bookingsRouter.get(
          JOIN teachers t ON t.id = s.teacher_id
          JOIN students st ON st.id = b.student_id
          LEFT JOIN students pp ON pp.id = b.payment_partner_id
-        WHERE b.student_id = ANY($1::int[]) AND b.status = 'booked'
+        WHERE b.student_id = ANY($1::int[])
+          AND (
+            b.status = 'booked'
+            OR (
+              b.status = 'cancelled'
+              AND b.cancelled_by IN ('student', 'teacher')
+              AND b.lesson_date >= $2::date
+            )
+          )
           AND NOT EXISTS (
             SELECT 1 FROM recurring_assignments ra
              WHERE ra.slot_id = b.slot_id
@@ -172,7 +183,7 @@ bookingsRouter.get(
                AND ra.starts_on <= b.lesson_date
           )
         ORDER BY b.lesson_date`,
-      [visibleIds],
+      [visibleIds, todayISO()],
     );
 
     const recurringSql = `SELECT ra.id, ra.slot_id, ra.child_name, ra.student_id, ra.payment_partner_id, ra.starts_on,
@@ -210,14 +221,18 @@ bookingsRouter.get(
     let exceptionsBySlot = new Map();
     if (recurringSlotIds.length) {
       const { rows: excRows } = await query(
-        `SELECT slot_id, exception_date, kind FROM slot_exceptions
+        `SELECT slot_id, exception_date, kind, cancelled_by FROM slot_exceptions
           WHERE slot_id = ANY($1::int[]) AND exception_date >= $2`,
         [recurringSlotIds, getMonday(today)],
       );
       for (const e of excRows) {
         const date = fmtDate(e.exception_date);
         if (!exceptionsBySlot.has(e.slot_id)) exceptionsBySlot.set(e.slot_id, []);
-        exceptionsBySlot.get(e.slot_id).push({ date, kind: e.kind });
+        exceptionsBySlot.get(e.slot_id).push({
+          date,
+          kind: e.kind,
+          cancelledBy: e.cancelled_by || null,
+        });
       }
     }
 
@@ -257,6 +272,7 @@ bookingsRouter.get(
 
     const mapped = visibleBookings.map((b) => {
       const access = accessFor(b);
+      const past = fmtDate(b.lesson_date) < today;
       return {
         id: b.id,
         lessonDate: fmtDate(b.lesson_date),
@@ -267,18 +283,21 @@ bookingsRouter.get(
         trackPayments: b.track_payments === true,
         childName: b.child_name || null,
         teacher: { id: b.teacher_id, name: b.teacher_name },
-        past: fmtDate(b.lesson_date) < today,
+        past,
         isPartner: access.isPartner,
         partnerName: access.partnerName,
         paymentPartner: access.paymentPartner,
         canMarkPaid: access.canMarkPaid,
         canManage: access.canManage,
+        status: b.status,
+        cancelledBy: b.cancelled_by || null,
+        canUndo: b.status === 'cancelled' && b.cancelled_by === 'student' && access.canManage && !past,
       };
     });
 
     res.json({
       upcoming: mapped.filter((b) => !b.past),
-      past: mapped.filter((b) => b.past).reverse(),
+      past: mapped.filter((b) => b.past && b.status === 'booked').reverse(),
       pending: visiblePending.map((r) => {
         const access = accessFor(r);
         return {
@@ -363,7 +382,10 @@ bookingsRouter.patch(
     const isOwnerStudent = bookerStudentId != null && booking.student_id === bookerStudentId;
     const isPaymentPartner =
       bookerStudentId != null && booking.payment_partner_id === bookerStudentId;
-    const isOwnerTeacher = req.user.role === 'teacher' && booking.teacher_id === req.user.id;
+    const isOwnerTeacher = await isScheduleTeacher(req, booking.teacher_id);
+    if (req.user.role === 'teacher' && booking.teacher_id === req.user.id) {
+      await assertCoachMayEdit(req);
+    }
     if (!isOwnerStudent && !isPaymentPartner && !isOwnerTeacher) {
       throw new HttpError(403, 'You cannot update payment for this booking.');
     }
@@ -413,15 +435,42 @@ bookingsRouter.delete(
         ? await resolveBookerStudentId(req.user).catch(() => null)
         : null;
     const isOwnerStudent = bookerStudentId != null && booking.student_id === bookerStudentId;
-    const isOwnerTeacher = req.user.role === 'teacher' && booking.teacher_id === req.user.id;
+    const isOwnerTeacher = await isScheduleTeacher(req, booking.teacher_id);
     if (!isOwnerStudent && !isOwnerTeacher) {
       throw new HttpError(403, 'You cannot cancel this booking.');
     }
 
+    if (req.user.role === 'teacher' && booking.teacher_id === req.user.id) {
+      const requested = await maybeRequestCancellation(req, {
+        action: 'booking_cancel',
+        slotId: booking.slot_id,
+        lessonDate: fmtDate(booking.lesson_date),
+        bookingId: booking.id,
+      });
+      if (requested) {
+        res.json(requested);
+        return;
+      }
+    }
+
+    const actor = cancelActor(req, booking.teacher_id);
     await query(
-      "UPDATE bookings SET status = 'cancelled', cancelled_at = now() WHERE id = $1",
-      [id],
+      `UPDATE bookings
+          SET status = 'cancelled', cancelled_at = now(), cancelled_by = $2
+        WHERE id = $1`,
+      [id, actor],
     );
+    res.json({ ok: true });
+  }),
+);
+
+bookingsRouter.post(
+  '/:id/undo',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'Invalid lesson.');
+    await undoBookingCancellation(req, id);
     res.json({ ok: true });
   }),
 );

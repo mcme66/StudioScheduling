@@ -1,6 +1,14 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db.js';
+import {
+  assignCoachTier,
+  createCoachTier,
+  deleteCoachTier,
+  listCoachTiers,
+  moveCoachTier,
+  updateCoachTier,
+} from '../utils/coachTiers.js';
 import { asyncHandler, HttpError } from '../middleware/error.js';
 import { requireRole } from '../middleware/auth.js';
 import { addDays, addWeeks, getMonday, isValidDateStr, todayISO, weekdayOf } from '../utils/week.js';
@@ -24,6 +32,13 @@ import {
   normalizeWeekdays,
   fmtTime,
 } from '../utils/classSchedules.js';
+import {
+  applyCancellationRequest,
+  countPendingCancellationRequests,
+  dismissCancellationRequest,
+  fillCancellationRequest,
+  listStudioCancellationRequests,
+} from '../services/coachManagement.js';
 
 export const ownerRouter = Router();
 
@@ -142,6 +157,16 @@ const studioSchema = z.object({
   studioStudentFloorFeeCents: z.number().int().min(0).max(10_000_000).optional(),
 });
 
+const tierSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  description: z.string().max(500).optional().or(z.literal('')),
+});
+
+const tierPatchSchema = z.object({
+  name: z.string().trim().min(1).max(80).optional(),
+  description: z.string().max(500).optional().or(z.literal('')),
+});
+
 const roomSchema = z.object({
   name: z.string().min(1).max(80),
   description: z.string().max(500).optional().or(z.literal('')),
@@ -196,17 +221,20 @@ async function loadStudioPayload(studioId) {
   if (!studio) throw new HttpError(404, 'Studio not found.');
 
   const { rows: teachers } = await query(
-    `SELECT t.id, t.full_name, t.bio, t.is_active
+    `SELECT t.id, t.full_name, t.bio, t.is_active, ts.owner_managed,
+            ct.id AS tier_id, ct.name AS tier_name
        FROM teachers t
        JOIN teacher_studios ts ON ts.teacher_id = t.id
+       LEFT JOIN coach_tiers ct ON ct.id = ts.tier_id
       WHERE ts.studio_id = $1
-      ORDER BY t.full_name`,
+      ORDER BY ct.sort_order NULLS LAST, ct.id NULLS LAST, t.full_name`,
     [studioId],
   );
 
-  const [rooms, classSchedules] = await Promise.all([
+  const [rooms, classSchedules, tiers] = await Promise.all([
     listRooms(studioId),
     listClassSchedules(studioId),
+    listCoachTiers(studioId),
   ]);
 
   return {
@@ -222,12 +250,17 @@ async function loadStudioPayload(studioId) {
     },
     rooms,
     classSchedules,
+    tiers,
     teachers: teachers.map((t) => ({
       id: t.id,
       fullName: t.full_name,
       bio: t.bio || null,
       isActive: t.is_active === true,
+      ownerManaged: t.owner_managed === true,
+      tierId: t.tier_id || null,
+      tierName: t.tier_name || null,
     })),
+    pendingCancellationCount: await countPendingCancellationRequests(studioId),
   };
 }
 
@@ -249,6 +282,120 @@ ownerRouter.get(
   asyncHandler(async (req, res) => {
     const studioId = await ownerStudioId(req.user.id);
     res.json(await loadStudioPayload(studioId));
+  }),
+);
+
+ownerRouter.patch(
+  '/teachers/:teacherId/managed',
+  asyncHandler(async (req, res) => {
+    const teacherId = Number(req.params.teacherId);
+    const { managed } = z.object({ managed: z.boolean() }).parse(req.body);
+    if (!Number.isInteger(teacherId) || teacherId <= 0) {
+      throw new HttpError(400, 'Invalid coach.');
+    }
+    const studioId = await ownerStudioId(req.user.id);
+    const { rowCount } = await query(
+      `UPDATE teacher_studios
+          SET owner_managed = $1
+        WHERE teacher_id = $2 AND studio_id = $3`,
+      [managed, teacherId, studioId],
+    );
+    if (!rowCount) throw new HttpError(404, 'That coach is not at your studio.');
+    res.json({ ok: true, ownerManaged: managed });
+  }),
+);
+
+ownerRouter.patch(
+  '/teachers/:teacherId/tier',
+  asyncHandler(async (req, res) => {
+    const teacherId = Number(req.params.teacherId);
+    const { tierId } = z
+      .object({ tierId: z.number().int().positive().nullable() })
+      .parse(req.body);
+    if (!Number.isInteger(teacherId) || teacherId <= 0) {
+      throw new HttpError(400, 'Invalid coach.');
+    }
+    const studioId = await ownerStudioId(req.user.id);
+    res.json(await assignCoachTier(studioId, teacherId, tierId));
+  }),
+);
+
+ownerRouter.post(
+  '/tiers',
+  asyncHandler(async (req, res) => {
+    const studioId = await ownerStudioId(req.user.id);
+    const data = tierSchema.parse(req.body);
+    const tier = await createCoachTier(studioId, data);
+    res.status(201).json({ tier });
+  }),
+);
+
+ownerRouter.patch(
+  '/tiers/:id',
+  asyncHandler(async (req, res) => {
+    const studioId = await ownerStudioId(req.user.id);
+    const tierId = Number(req.params.id);
+    if (!Number.isInteger(tierId) || tierId <= 0) throw new HttpError(400, 'Invalid tier.');
+    const data = tierPatchSchema.parse(req.body);
+    res.json({ tier: await updateCoachTier(studioId, tierId, data) });
+  }),
+);
+
+ownerRouter.delete(
+  '/tiers/:id',
+  asyncHandler(async (req, res) => {
+    const studioId = await ownerStudioId(req.user.id);
+    const tierId = Number(req.params.id);
+    if (!Number.isInteger(tierId) || tierId <= 0) throw new HttpError(400, 'Invalid tier.');
+    await deleteCoachTier(studioId, tierId);
+    res.json({ ok: true });
+  }),
+);
+
+ownerRouter.post(
+  '/tiers/:id/move',
+  asyncHandler(async (req, res) => {
+    const studioId = await ownerStudioId(req.user.id);
+    const tierId = Number(req.params.id);
+    const { direction } = z.object({ direction: z.enum(['up', 'down']) }).parse(req.body);
+    if (!Number.isInteger(tierId) || tierId <= 0) throw new HttpError(400, 'Invalid tier.');
+    await moveCoachTier(studioId, tierId, direction);
+    res.json({ ok: true });
+  }),
+);
+
+ownerRouter.get(
+  '/cancellation-requests',
+  asyncHandler(async (req, res) => {
+    res.json({ requests: await listStudioCancellationRequests(req.user.id) });
+  }),
+);
+
+ownerRouter.post(
+  '/cancellation-requests/:id/apply',
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'Invalid request.');
+    res.json(await applyCancellationRequest(req.user.id, id));
+  }),
+);
+
+ownerRouter.post(
+  '/cancellation-requests/:id/dismiss',
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'Invalid request.');
+    res.json(await dismissCancellationRequest(req.user.id, id));
+  }),
+);
+
+ownerRouter.post(
+  '/cancellation-requests/:id/fill',
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const { teacherId } = z.object({ teacherId: z.number().int().positive() }).parse(req.body);
+    if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'Invalid request.');
+    res.json(await fillCancellationRequest(req.user.id, id, teacherId));
   }),
 );
 
@@ -303,6 +450,9 @@ ownerRouter.get(
           id: t.id,
           fullName: t.fullName,
           isActive: t.isActive,
+          ownerManaged: t.ownerManaged === true,
+          tierId: t.tierId || null,
+          tierName: t.tierName || null,
           lessonCount: 0,
           floorFeeCents: 0,
           lastLessonDate: null,

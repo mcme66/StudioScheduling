@@ -369,6 +369,113 @@ function formatLessonLines(lessons, { html }) {
     .join('\n');
 }
 
+function whenLine({ weekday, lessonDate, startTime, durationMin, series, fromDate }) {
+  const time = `${formatTime(String(startTime).slice(0, 5))} (${durationMin} min)`;
+  if (series) {
+    const start = fromDate || lessonDate;
+    const starting = start ? ` starting ${formatLessonDate(start)}` : '';
+    return `Every ${WEEKDAY_NAMES[weekday] || 'week'} at ${time}${starting}`;
+  }
+  const dateLabel = lessonDate ? formatLessonDate(lessonDate) : WEEKDAY_NAMES[weekday] || 'the requested day';
+  return `${dateLabel} at ${time}`;
+}
+
+export async function sendCancellationRequest({
+  owner,
+  coachName,
+  studioName,
+  actionLabel,
+  weekday,
+  lessonDate,
+  fromDate,
+  startTime,
+  durationMin,
+  series,
+  occupantLabel,
+  occupantDetail,
+}) {
+  if (!owner?.email) return;
+  const requestsUrl = `${env.clientUrl}/owner/requests`;
+  const when = whenLine({ weekday, lessonDate, startTime, durationMin, series, fromDate });
+  const who = occupantDetail ? `${occupantLabel} (${occupantDetail})` : occupantLabel;
+  const subject = `Cancellation request from ${coachName}`;
+  const text = [
+    `Hi ${owner.full_name},`,
+    '',
+    `${coachName} asked to change a lesson at ${studioName}. The lesson is still on their schedule until you handle it.`,
+    `Request: ${actionLabel}`,
+    `When: ${when}`,
+    `Who: ${who}`,
+    '',
+    `Review requests: ${requestsUrl}`,
+  ].join('\n');
+  const html = [
+    `<p>Hi ${owner.full_name},</p>`,
+    `<p>${coachName} asked to change a lesson at ${studioName}. The lesson is still on their schedule until you handle it.</p>`,
+    `<p><strong>Request:</strong> ${actionLabel}<br>`,
+    `<strong>When:</strong> ${when}<br>`,
+    `<strong>Who:</strong> ${who}</p>`,
+    `<p><a href="${requestsUrl}">Review requests</a></p>`,
+  ].join('');
+  await sendEmail({ to: owner.email, subject, text, html });
+}
+
+export async function sendLessonMoved({
+  student,
+  fromCoach,
+  toCoach,
+  weekday,
+  lessonDate,
+  fromDate,
+  startTime,
+  durationMin,
+  series,
+  childName,
+}) {
+  const when = whenLine({ weekday, lessonDate, startTime, durationMin, series, fromDate });
+  const forLine = childName ? ` for ${childName}` : '';
+  if (studentWantsEmail(student)) {
+    const subject = series ? 'Your weekly lesson has a new coach' : 'Your lesson has a new coach';
+    const text = [
+      `Hi ${student.full_name},`,
+      '',
+      `Your lesson${forLine} with ${fromCoach.full_name} will be taught by ${toCoach.full_name}.`,
+      when,
+      '',
+      `View your lessons: ${env.clientUrl}/my-lessons`,
+    ].join('\n') + emailFooterText();
+    const html = [
+      `<p>Hi ${student.full_name},</p>`,
+      `<p>Your lesson${forLine} with ${fromCoach.full_name} will be taught by ${toCoach.full_name}.</p>`,
+      `<p>${when}</p>`,
+      `<p><a href="${env.clientUrl}/my-lessons">View your lessons</a></p>`,
+      emailFooterHtml(),
+    ].join('');
+    await sendEmail({ to: student.email, subject, text, html });
+  }
+  if (teacherWantsEmail(toCoach)) {
+    const who = childName ? `${childName} (${student.full_name})` : student.full_name;
+    const subject = series ? 'A weekly lesson was added to your schedule' : 'A lesson was added to your schedule';
+    const text = [
+      `Hi ${toCoach.full_name},`,
+      '',
+      `The studio moved a lesson from ${fromCoach.full_name} onto your schedule.`,
+      `Who: ${who}`,
+      when,
+      '',
+      `View your dashboard: ${env.clientUrl}/teacher`,
+    ].join('\n') + emailFooterText();
+    const html = [
+      `<p>Hi ${toCoach.full_name},</p>`,
+      `<p>The studio moved a lesson from ${fromCoach.full_name} onto your schedule.</p>`,
+      `<p><strong>Who:</strong> ${who}<br>${when}</p>`,
+      `<p><a href="${env.clientUrl}/teacher">View your dashboard</a></p>`,
+      emailFooterHtml(),
+    ].join('');
+    await sendEmail({ to: toCoach.email, subject, text, html });
+  }
+}
+
 export async function sendTeacherDailySchedule({ teacher, lessons, lessonDate }) {
   if (!teacherWantsEmail(teacher)) return;
   // Never send an empty digest: only email on days with lessons.

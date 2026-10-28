@@ -2,13 +2,16 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { query, withTransaction } from '../db.js';
 import { asyncHandler, HttpError } from '../middleware/error.js';
-import { requireAuth, requireRole } from '../middleware/auth.js';
+import { requireAuth } from '../middleware/auth.js';
+import { isScheduleTeacher, requireScheduleTeacher } from '../middleware/scheduleTeacher.js';
+import { assertCoachMayEdit, maybeRequestCancellation } from '../services/coachManagement.js';
 import {
   sendRecurringApproved,
   sendWeeklySpotRequested,
   sendWeeklySpotDeclined,
   sendWeeklySpotOneTime,
 } from '../services/email.js';
+import { cancelActor, undoWeeklyCancellation } from '../utils/lessonCancel.js';
 import {
   weekdayOf,
   isValidDateStr,
@@ -61,10 +64,10 @@ function upcomingStart(startsOn, startTime, seriesStart, seriesEnd) {
 }
 
 /** Drop this student's not-yet-started lessons on the slot from `fromDate` on. */
-async function cancelUnstartedBookings(client, { slotId, studentId, fromDate }) {
+async function cancelUnstartedBookings(client, { slotId, studentId, fromDate, cancelledBy }) {
   await client.query(
     `UPDATE bookings b
-        SET status = 'cancelled', cancelled_at = now()
+        SET status = 'cancelled', cancelled_at = now(), cancelled_by = $4
        FROM slots s
       WHERE b.slot_id = s.id
         AND b.slot_id = $1
@@ -72,7 +75,7 @@ async function cancelUnstartedBookings(client, { slotId, studentId, fromDate }) 
         AND b.status = 'booked'
         AND b.lesson_date >= $3::date
         AND (b.lesson_date + s.start_time) > now()`,
-    [slotId, studentId, fromDate],
+    [slotId, studentId, fromDate, cancelledBy],
   );
 }
 
@@ -243,7 +246,7 @@ recurringRouter.post(
 // Teacher: list pending weekly-spot requests for their slots.
 recurringRouter.get(
   '/pending',
-  requireRole('teacher'),
+  requireScheduleTeacher,
   asyncHandler(async (req, res) => {
     const { rows } = await query(
       `SELECT ra.id, ra.requested_at, ra.child_name, ra.payment_partner_id, ra.starts_on,
@@ -256,7 +259,7 @@ recurringRouter.get(
          LEFT JOIN students pp ON pp.id = ra.payment_partner_id
         WHERE s.teacher_id = $1 AND ra.status = 'pending'
         ORDER BY ra.requested_at`,
-      [req.user.id],
+      [req.scheduleTeacherId],
     );
     res.json({
       pending: rows.map((r) => ({
@@ -281,12 +284,13 @@ recurringRouter.get(
 
 recurringRouter.post(
   '/:id/approve',
-  requireRole('teacher'),
+  requireScheduleTeacher,
   asyncHandler(async (req, res) => {
+    await assertCoachMayEdit(req);
     const id = Number(req.params.id);
 
     const result = await withTransaction(async (client) => {
-      const reqRow = await lockPendingRequest(client, id, req.user.id);
+      const reqRow = await lockPendingRequest(client, id, req.scheduleTeacherId);
       if (!reqRow.active || reqRow.one_off_date) {
         throw new HttpError(409, 'That lesson time is no longer available.');
       }
@@ -347,7 +351,7 @@ recurringRouter.post(
       return { ...reqRow, starts_on: startsOn };
     });
 
-    const { student, teacher } = await peopleForRequest(result.student_id, req.user.id);
+    const { student, teacher } = await peopleForRequest(result.student_id, req.scheduleTeacherId);
     await sendRecurringApproved({
       student,
       teacher,
@@ -362,12 +366,13 @@ recurringRouter.post(
 
 recurringRouter.post(
   '/:id/one-time',
-  requireRole('teacher'),
+  requireScheduleTeacher,
   asyncHandler(async (req, res) => {
+    await assertCoachMayEdit(req);
     const id = Number(req.params.id);
 
     const result = await withTransaction(async (client) => {
-      const reqRow = await lockPendingRequest(client, id, req.user.id);
+      const reqRow = await lockPendingRequest(client, id, req.scheduleTeacherId);
       if (!reqRow.active || reqRow.one_off_date) {
         throw new HttpError(409, 'That lesson time is no longer available.');
       }
@@ -416,7 +421,7 @@ recurringRouter.post(
       return { ...reqRow, lessonDate };
     });
 
-    const { student, teacher } = await peopleForRequest(result.student_id, req.user.id);
+    const { student, teacher } = await peopleForRequest(result.student_id, req.scheduleTeacherId);
     await sendWeeklySpotOneTime({
       student,
       teacher,
@@ -431,16 +436,18 @@ recurringRouter.post(
 
 recurringRouter.post(
   '/:id/decline',
-  requireRole('teacher'),
+  requireScheduleTeacher,
   asyncHandler(async (req, res) => {
+    await assertCoachMayEdit(req);
     const id = Number(req.params.id);
     const result = await withTransaction(async (client) => {
-      const reqRow = await lockPendingRequest(client, id, req.user.id);
+      const reqRow = await lockPendingRequest(client, id, req.scheduleTeacherId);
       if (reqRow.starts_on) {
         await cancelUnstartedBookings(client, {
           slotId: reqRow.slot_id,
           studentId: reqRow.student_id,
           fromDate: fmtDate(reqRow.starts_on),
+          cancelledBy: 'closed',
         });
       }
       await client.query(
@@ -450,7 +457,7 @@ recurringRouter.post(
       return reqRow;
     });
 
-    const { student, teacher } = await peopleForRequest(result.student_id, req.user.id);
+    const { student, teacher } = await peopleForRequest(result.student_id, req.scheduleTeacherId);
     await sendWeeklySpotDeclined({
       student,
       teacher,
@@ -487,7 +494,10 @@ recurringRouter.patch(
     }
 
     const bookerStudentId = await resolveBookerStudentId(req.user).catch(() => null);
-    const isTeacher = req.user.role === 'teacher' && ra.teacher_id === req.user.id;
+    const isTeacher = await isScheduleTeacher(req, ra.teacher_id);
+    if (req.user.role === 'teacher' && ra.teacher_id === req.user.id) {
+      await assertCoachMayEdit(req);
+    }
     const isStudent = bookerStudentId != null && ra.student_id === bookerStudentId;
     const isPaymentPartner =
       bookerStudentId != null && ra.payment_partner_id === bookerStudentId;
@@ -553,7 +563,7 @@ recurringRouter.post(
     if (!ra) throw new HttpError(404, 'Weekly spot not found.');
 
     const bookerStudentId = await resolveBookerStudentId(req.user).catch(() => null);
-    const isTeacher = req.user.role === 'teacher' && ra.teacher_id === req.user.id;
+    const isTeacher = await isScheduleTeacher(req, ra.teacher_id);
     const isStudent = bookerStudentId != null && ra.student_id === bookerStudentId;
     if (!isTeacher && !isStudent) {
       throw new HttpError(403, 'You cannot change this weekly spot.');
@@ -580,12 +590,39 @@ recurringRouter.post(
       throw new HttpError(400, 'That week is outside this weekly slot.');
     }
 
+    if (req.user.role === 'teacher' && ra.teacher_id === req.user.id) {
+      const requested = await maybeRequestCancellation(req, {
+        action: 'week_skip',
+        slotId: ra.slot_id,
+        lessonDate: date,
+        recurringAssignmentId: ra.id,
+      });
+      if (requested) {
+        res.json(requested);
+        return;
+      }
+    }
+
+    const actor = cancelActor(req, ra.teacher_id);
     await query(
-      `INSERT INTO slot_exceptions (slot_id, exception_date, kind)
-       VALUES ($1, $2, 'skipped')
-       ON CONFLICT (slot_id, exception_date) DO UPDATE SET kind = 'skipped'`,
-      [ra.slot_id, date],
+      `INSERT INTO slot_exceptions (slot_id, exception_date, kind, cancelled_by)
+       VALUES ($1, $2, 'skipped', $3)
+       ON CONFLICT (slot_id, exception_date)
+       DO UPDATE SET kind = 'skipped', cancelled_by = EXCLUDED.cancelled_by`,
+      [ra.slot_id, date, actor],
     );
+    res.json({ ok: true });
+  }),
+);
+
+recurringRouter.post(
+  '/:id/undo',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const { date } = skipSchema.parse(req.body);
+    if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'Invalid weekly spot.');
+    await undoWeeklyCancellation(req, id, date);
     res.json({ ok: true });
   }),
 );
@@ -597,6 +634,7 @@ recurringRouter.delete(
   requireAuth,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
+    let requested = null;
     await withTransaction(async (client) => {
       const { rows } = await client.query(
         `SELECT ra.id, ra.status, ra.student_id, ra.starts_on, ra.slot_id, s.teacher_id
@@ -610,7 +648,7 @@ recurringRouter.delete(
       if (!ra) throw new HttpError(404, 'Weekly spot not found.');
 
       const bookerStudentId = await resolveBookerStudentId(req.user).catch(() => null);
-      const isTeacher = req.user.role === 'teacher' && ra.teacher_id === req.user.id;
+      const isTeacher = await isScheduleTeacher(req, ra.teacher_id);
       const isStudent = bookerStudentId != null && ra.student_id === bookerStudentId;
       if (!isTeacher && !isStudent) {
         throw new HttpError(403, 'You cannot remove this weekly spot.');
@@ -619,11 +657,25 @@ recurringRouter.delete(
         throw new HttpError(409, 'This weekly spot is not active.');
       }
 
+      if (req.user.role === 'teacher' && ra.teacher_id === req.user.id) {
+        if (ra.status !== 'approved') {
+          await assertCoachMayEdit(req);
+        } else {
+          requested = await maybeRequestCancellation(req, {
+            action: 'recurring_remove',
+            slotId: ra.slot_id,
+            recurringAssignmentId: ra.id,
+          });
+          if (requested) return;
+        }
+      }
+
       if (ra.status === 'pending' && ra.starts_on) {
         await cancelUnstartedBookings(client, {
           slotId: ra.slot_id,
           studentId: ra.student_id,
           fromDate: fmtDate(ra.starts_on),
+          cancelledBy: 'closed',
         });
       }
 
@@ -632,6 +684,6 @@ recurringRouter.delete(
         [id],
       );
     });
-    res.json({ ok: true });
+    res.json(requested || { ok: true });
   }),
 );

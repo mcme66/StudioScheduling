@@ -11,6 +11,54 @@ import {
 } from '../lib/format.js';
 import StudioRoomsSchedule from '../components/StudioRoomsSchedule.jsx';
 
+function instructorSections(teachers, tiers) {
+  const tierById = new Map((tiers || []).map((tier) => [tier.id, tier]));
+  const assigned = (tiers || [])
+    .map((tier) => ({
+      key: tier.id,
+      tier,
+      teachers: teachers.filter((teacher) => teacher.tierId === tier.id),
+    }))
+    .filter((section) => section.teachers.length > 0);
+  const loose = teachers.filter((teacher) => !tierById.has(teacher.tierId));
+  if (assigned.length === 0) {
+    return [{ key: 'all', tier: null, title: 'Instructors', teachers }];
+  }
+  const sections = assigned.map((section) => ({
+    key: section.key,
+    tier: section.tier,
+    title: section.tier.name,
+    teachers: section.teachers,
+  }));
+  if (loose.length) {
+    sections.push({ key: 'other', tier: null, title: 'Instructors', teachers: loose });
+  }
+  return sections;
+}
+
+function InstructorCard({ teacher, slug }) {
+  return (
+    <div className="instructor-card">
+      <div className="instructor-heading">
+        <h3>{teacher.fullName}</h3>
+        {teacher.tierName && <div className="contact">{teacher.tierName}</div>}
+      </div>
+      {teacher.bio && <p className="bio">{teacher.bio}</p>}
+      <div className="row spread">
+        <span className="muted" style={{ fontSize: '13px' }}>
+          {fmtPrice(teacher.defaultPriceCents)} · {teacher.defaultDurationMin} min
+        </span>
+        <span className="pill pill-open">
+          {teacher.activeSlots} time{teacher.activeSlots === 1 ? '' : 's'}
+        </span>
+      </div>
+      <Link to={`/studios/${slug}/book/${teacher.id}`} className="btn btn-primary btn-block">
+        View schedule
+      </Link>
+    </div>
+  );
+}
+
 function quarterHours(startMin, endMin) {
   const out = [];
   for (let mins = startMin; mins <= endMin; mins += 15) {
@@ -172,6 +220,7 @@ export default function StudioDetail() {
                           <div className="slot-dot" />
                           <div className="slot-info">
                             <div className="slot-time">{r.teacherName}</div>
+                            {r.tierName && <div className="contact">{r.tierName}</div>}
                             <div className="slot-meta">
                               {fmtDate(r.lessonDate, { weekday: 'long', month: 'short', day: 'numeric' })} ·{' '}
                               {fmtTimeRange(r.startTime, r.durationMin)} · {r.durationMin} min ·{' '}
@@ -192,32 +241,30 @@ export default function StudioDetail() {
             <div className="card center muted">No instructors are available at this studio yet.</div>
           )}
 
-          {data.teachers.length > 0 && (
-            <>
-              <h2 className="section-title" style={{ marginTop: '0.25rem' }}>
-                Instructors
-              </h2>
-              <div className="instructor-grid">
-                {data.teachers.map((t) => (
-                  <div className="instructor-card" key={t.id}>
-                    <h3>{t.fullName}</h3>
-                    {t.bio && <p className="bio">{t.bio}</p>}
-                    <div className="row spread">
-                      <span className="muted" style={{ fontSize: '13px' }}>
-                        {fmtPrice(t.defaultPriceCents)} · {t.defaultDurationMin} min
-                      </span>
-                      <span className="pill pill-open">
-                        {t.activeSlots} time{t.activeSlots === 1 ? '' : 's'}
-                      </span>
-                    </div>
-                    <Link to={`/studios/${slug}/book/${t.id}`} className="btn btn-primary btn-block">
-                      View schedule
-                    </Link>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
+          {data.teachers.length > 0 &&
+            instructorSections(data.teachers, data.tiers).map((section) => (
+              <section className="instructor-tier" key={section.key}>
+                {section.tier ? (
+                  <>
+                    <h2 className="tier-heading">{section.title}</h2>
+                    {section.tier.description && (
+                      <p className="muted" style={{ fontSize: '14px', marginBottom: '0.85rem' }}>
+                        {section.tier.description}
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <h2 className="section-title" style={{ marginTop: '0.25rem' }}>
+                    {section.title}
+                  </h2>
+                )}
+                <div className="instructor-grid">
+                  {section.teachers.map((teacher) => (
+                    <InstructorCard key={teacher.id} teacher={teacher} slug={slug} />
+                  ))}
+                </div>
+              </section>
+            ))}
         </>
       )}
     </div>

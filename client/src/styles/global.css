@@ -1572,6 +1572,34 @@ a:hover {
 .switch.on::after {
   transform: translateX(19px);
 }
+.manage-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.manage-toggle:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+.manage-toggle.on {
+  color: var(--green);
+}
+.managed-banner {
+  margin: 0 0 1rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--green);
+  border-radius: 10px;
+  background: var(--green-light);
+  font-size: 14px;
+}
 
 /* Studio checklist (teacher dashboard) */
 .studio-checklist {
@@ -1658,6 +1686,30 @@ a:hover {
   font-family: 'DM Serif Display', serif;
   font-weight: 400;
   font-size: 1.3rem;
+}
+.instructor-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.instructor-tier + .instructor-tier {
+  margin-top: 1.5rem;
+}
+.tier-heading {
+  font-family: 'DM Serif Display', serif;
+  font-weight: 400;
+  font-size: 1.55rem;
+  margin-bottom: 0.35rem;
+}
+.tier-assign {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 8px;
+  background: var(--paper);
+  color: var(--ink);
+  min-width: 8.5rem;
 }
 .instructor-card .bio {
   font-size: 13px;

@@ -16,6 +16,7 @@ import {
   getMonday,
   addWeeks,
   dateForWeekday,
+  isSlotPast,
 } from '../lib/format.js';
 import {
   DEFAULT_LESSON_COLOR,
@@ -35,6 +36,7 @@ function buildWeekEvents({ data, invites, weekStart, colorFor }) {
 
   for (const b of [...(data?.upcoming || []), ...(data?.past || [])]) {
     if (!inWeek(b.lessonDate)) continue;
+    const cancelled = b.status === 'cancelled';
     events.push({
       id: `b-${b.id}`,
       date: b.lessonDate,
@@ -43,7 +45,14 @@ function buildWeekEvents({ data, invites, weekStart, colorFor }) {
       teacher: b.teacher.name,
       childName: b.childName,
       color: colorFor(b),
-      note: b.isPartner ? `Partner · ${b.partnerName || ''}`.trim() : null,
+      variant: cancelled ? 'cancelled' : undefined,
+      note: cancelled
+        ? b.cancelledBy === 'teacher'
+          ? 'Cancelled by teacher'
+          : 'Cancelled'
+        : b.isPartner
+          ? `Partner · ${b.partnerName || ''}`.trim()
+          : null,
     });
   }
 
@@ -52,7 +61,9 @@ function buildWeekEvents({ data, invites, weekStart, colorFor }) {
     if (r.startsOn && date < r.startsOn) continue;
     if (r.seriesStartDate && date < r.seriesStartDate) continue;
     if (r.seriesEndDate && date > r.seriesEndDate) continue;
-    const kind = (r.exceptions || []).find((e) => e.date === date)?.kind || null;
+    const exception = (r.exceptions || []).find((e) => e.date === date) || null;
+    if (exception?.cancelledBy === 'studio') continue;
+    const kind = exception?.kind || null;
     events.push({
       id: `r-${r.id}-${date}`,
       date,
@@ -174,6 +185,24 @@ export default function MyLessons() {
     mutationFn: ({ id, date }) => api(`/recurring/${id}/skip`, { method: 'POST', body: { date } }),
     onSuccess: () => {
       toast('Lesson cancelled for that week.');
+      invalidate();
+    },
+    onError: (err) => toast(err.message),
+  });
+
+  const undoBooking = useMutation({
+    mutationFn: (id) => api(`/bookings/${id}/undo`, { method: 'POST' }),
+    onSuccess: () => {
+      toast('Lesson restored.');
+      invalidate();
+    },
+    onError: (err) => toast(err.message),
+  });
+
+  const undoSkip = useMutation({
+    mutationFn: ({ id, date }) => api(`/recurring/${id}/undo`, { method: 'POST', body: { date } }),
+    onSuccess: () => {
+      toast('Lesson restored.');
       invalidate();
     },
     onError: (err) => toast(err.message),
@@ -465,7 +494,7 @@ export default function MyLessons() {
               ) : (
                 weeklySpots.map((r) => {
                   const exceptionFor = (date) =>
-                    (r.exceptions || []).find((e) => e.date === date)?.kind || null;
+                    (r.exceptions || []).find((e) => e.date === date) || null;
                   const paidFor = (date) =>
                     (r.payments || []).find((p) => p.date === date)?.paid === true;
                   const occurrences = r.occurrences;
@@ -509,14 +538,37 @@ export default function MyLessons() {
                           Upcoming weeks
                         </div>
                         {occurrences.map((date) => {
-                          const kind = exceptionFor(date);
+                          const exception = exceptionFor(date);
+                          if (exception?.cancelledBy === 'studio') return null;
+                          const kind = exception?.kind || null;
+                          const canUndoSkip =
+                            kind === 'skipped' &&
+                            exception.cancelledBy === 'student' &&
+                            r.canManage !== false &&
+                            !isSlotPast(date, r.startTime);
                           return (
                             <div className="occurrence-row" key={date}>
                               <span>{fmtDate(date, { weekday: 'short', month: 'short', day: 'numeric' })}</span>
                               {kind === 'blocked' ? (
-                                <span className="pill pill-warn">Cancelled by teacher</span>
+                                <span className="pill pill-warn">
+                                  {exception.cancelledBy ? 'Cancelled by teacher' : 'Unavailable this week'}
+                                </span>
                               ) : kind === 'skipped' ? (
-                                <span className="pill pill-warn">Cancelled</span>
+                                <div className="row" style={{ gap: '0.4rem' }}>
+                                  <span className="pill pill-warn">
+                                    {exception.cancelledBy ? 'Cancelled' : 'Cancelled this week'}
+                                  </span>
+                                  {canUndoSkip && (
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-sm"
+                                      onClick={() => undoSkip.mutate({ id: r.id, date })}
+                                      disabled={undoSkip.isPending}
+                                    >
+                                      Undo
+                                    </button>
+                                  )}
+                                </div>
                               ) : (
                                 <div className="row" style={{ gap: '0.4rem' }}>
                                   {r.trackPayments && r.canMarkPaid !== false && (
@@ -584,6 +636,24 @@ export default function MyLessons() {
                       <div className="contact">{lessonContact(b)}</div>
                     </div>
                     <div className="row" style={{ gap: '0.4rem' }}>
+                      {b.status === 'cancelled' ? (
+                        <>
+                          <span className="pill pill-warn">
+                            {b.cancelledBy === 'teacher' ? 'Cancelled by teacher' : 'Cancelled'}
+                          </span>
+                          {b.canUndo && !isSlotPast(b.lessonDate, b.startTime) && (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => undoBooking.mutate(b.id)}
+                              disabled={undoBooking.isPending}
+                            >
+                              Undo
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <>
                       {b.isPartner && <span className="pill pill-partner">Partner</span>}
                       {b.trackPayments && b.canMarkPaid !== false && (
                         <PaidToggle
@@ -617,6 +687,8 @@ export default function MyLessons() {
                         >
                           Cancel
                         </button>
+                      )}
+                        </>
                       )}
                     </div>
                   </div>

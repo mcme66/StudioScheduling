@@ -14,6 +14,8 @@ import StudentRegister from './pages/StudentRegister.jsx';
 import Profile from './pages/Profile.jsx';
 import OwnerDashboard from './pages/OwnerDashboard.jsx';
 import OwnerCoachLessons from './pages/OwnerCoachLessons.jsx';
+import OwnerCoachSchedule from './pages/OwnerCoachSchedule.jsx';
+import OwnerCancellationRequests from './pages/OwnerCancellationRequests.jsx';
 import OwnerRegister from './pages/OwnerRegister.jsx';
 
 export default function App() {
@@ -60,6 +62,22 @@ export default function App() {
           element={
             <RequireAuth role="studio_owner">
               <OwnerDashboard />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/owner/requests"
+          element={
+            <RequireAuth role="studio_owner">
+              <OwnerCancellationRequests />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/owner/coaches/:teacherId/schedule"
+          element={
+            <RequireAuth role="studio_owner">
+              <OwnerCoachSchedule />
             </RequireAuth>
           }
         />

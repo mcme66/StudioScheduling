@@ -2,7 +2,13 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { query, withTransaction } from '../db.js';
 import { asyncHandler, HttpError } from '../middleware/error.js';
-import { requireRole } from '../middleware/auth.js';
+import { requireScheduleTeacher } from '../middleware/scheduleTeacher.js';
+import {
+  assertCoachMayEdit,
+  listPendingCancellationRequests,
+  maybeRequestCancellation,
+} from '../services/coachManagement.js';
+import { cancelActor } from '../utils/lessonCancel.js';
 import {
   weekdayOf,
   isValidDateStr,
@@ -17,7 +23,7 @@ import {
 
 export const slotsRouter = Router();
 
-slotsRouter.use(requireRole('teacher'));
+slotsRouter.use(requireScheduleTeacher);
 
 const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -76,6 +82,7 @@ function serializeSlot(row) {
     seriesEndDate: row.series_end_date ? fmtDate(row.series_end_date) : null,
     // Only populated when the list is requested for a specific week.
     blockedThisWeek: row.blockedThisWeek === true,
+    blockCancelledBy: row.blockCancelledBy || null,
   };
 }
 
@@ -139,7 +146,7 @@ slotsRouter.get(
     if (!week) {
       const { rows } = await query(
         'SELECT * FROM slots WHERE teacher_id = $1 AND one_off_date IS NULL ORDER BY weekday, start_time',
-        [req.user.id],
+        [req.scheduleTeacherId],
       );
       res.json({ slots: rows.map(serializeSlot) });
       return;
@@ -160,7 +167,7 @@ slotsRouter.get(
             )
           )
         ORDER BY weekday, start_time`,
-      [req.user.id, monday, sunday],
+      [req.scheduleTeacherId, monday, sunday],
     );
 
     // Drop weekly slots whose concrete weekday in this week falls outside bounds.
@@ -175,27 +182,42 @@ slotsRouter.get(
     });
 
     const recurringIds = inWeek.filter((r) => r.one_off_date == null).map((r) => r.id);
-    let blockedBySlot = new Set();
+    let blockedBySlot = new Map();
     if (recurringIds.length) {
       const { rows: excRows } = await query(
-        `SELECT slot_id FROM slot_exceptions
+        `SELECT slot_id, cancelled_by FROM slot_exceptions
           WHERE slot_id = ANY($1::int[]) AND kind = 'blocked'
             AND exception_date BETWEEN $2 AND $3`,
         [recurringIds, monday, sunday],
       );
-      blockedBySlot = new Set(excRows.map((e) => e.slot_id));
+      blockedBySlot = new Map(excRows.map((e) => [e.slot_id, e.cancelled_by || null]));
     }
 
     const slots = inWeek.map((r) =>
-      serializeSlot({ ...r, blockedThisWeek: blockedBySlot.has(r.id) }),
+      serializeSlot({
+        ...r,
+        blockedThisWeek: blockedBySlot.has(r.id),
+        blockCancelledBy: blockedBySlot.get(r.id) || null,
+      }),
     );
-    res.json({ slots });
+    const requests = await listPendingCancellationRequests(req.scheduleTeacherId);
+    res.json({
+      slots: slots.map((slot) => ({
+        ...slot,
+        cancellationRequested: requests.some(
+          (r) =>
+            r.slotId === slot.id &&
+            (!r.lessonDate || (r.lessonDate >= monday && r.lessonDate <= sunday)),
+        ),
+      })),
+    });
   }),
 );
 
 slotsRouter.post(
   '/',
   asyncHandler(async (req, res) => {
+    await assertCoachMayEdit(req);
     const data = createSchema.parse(req.body);
     const oneOffDate = data.date ?? null;
 
@@ -214,7 +236,7 @@ slotsRouter.post(
       const { rows: existingRecurring } = await query(
         `SELECT id, series_start_date, series_end_date FROM slots
           WHERE teacher_id = $1 AND weekday = $2 AND start_time = $3 AND one_off_date IS NULL`,
-        [req.user.id, data.weekday, data.startTime],
+        [req.scheduleTeacherId, data.weekday, data.startTime],
       );
       if (existingRecurring[0]) {
         const r = existingRecurring[0];
@@ -245,7 +267,7 @@ slotsRouter.post(
         data.untilDate,
       );
       await assertNoOverlappingWeekly(
-        req.user.id,
+        req.scheduleTeacherId,
         data.weekday,
         data.startTime,
         seriesStartDate,
@@ -255,7 +277,7 @@ slotsRouter.post(
 
     const { rows: teacherRows } = await query(
       'SELECT default_price_cents, default_duration_min FROM teachers WHERE id = $1',
-      [req.user.id],
+      [req.scheduleTeacherId],
     );
     const teacher = teacherRows[0];
 
@@ -267,7 +289,7 @@ slotsRouter.post(
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
       [
-        req.user.id,
+        req.scheduleTeacherId,
         data.weekday,
         data.startTime,
         data.durationMin ?? teacher.default_duration_min,
@@ -295,6 +317,7 @@ slotsRouter.post(
 slotsRouter.patch(
   '/:id',
   asyncHandler(async (req, res) => {
+    await assertCoachMayEdit(req);
     const id = Number(req.params.id);
     const data = z
       .object({
@@ -323,7 +346,7 @@ slotsRouter.patch(
       throw new HttpError(400, 'Nothing to update.');
     }
 
-    values.push(id, req.user.id);
+    values.push(id, req.scheduleTeacherId);
     const { rows } = await query(
       `UPDATE slots SET ${fields.join(', ')}
         WHERE id = $${idx++} AND teacher_id = $${idx}
@@ -347,7 +370,7 @@ slotsRouter.post(
 
     const { rows } = await query(
       'SELECT id, weekday, one_off_date, series_start_date, series_end_date FROM slots WHERE id = $1 AND teacher_id = $2',
-      [id, req.user.id],
+      [id, req.scheduleTeacherId],
     );
     const slot = rows[0];
     if (!slot) throw new HttpError(404, 'Slot not found.');
@@ -368,16 +391,30 @@ slotsRouter.post(
       throw new HttpError(400, 'That date is outside this lesson series.');
     }
 
+    const requested = await maybeRequestCancellation(req, {
+      slotId: id,
+      action: 'week_block',
+      lessonDate: date,
+    });
+    if (requested) {
+      res.json(requested);
+      return;
+    }
+
+    const actor = cancelActor(req, req.scheduleTeacherId);
     await withTransaction(async (client) => {
       await client.query(
-        `INSERT INTO slot_exceptions (slot_id, exception_date, kind)
-         VALUES ($1, $2, 'blocked')
-         ON CONFLICT (slot_id, exception_date) DO UPDATE SET kind = 'blocked'`,
-        [id, date],
+        `INSERT INTO slot_exceptions (slot_id, exception_date, kind, cancelled_by)
+         VALUES ($1, $2, 'blocked', $3)
+         ON CONFLICT (slot_id, exception_date)
+         DO UPDATE SET kind = 'blocked', cancelled_by = EXCLUDED.cancelled_by`,
+        [id, date, actor],
       );
       await client.query(
-        "UPDATE bookings SET status = 'cancelled', cancelled_at = now() WHERE slot_id = $1 AND lesson_date = $2 AND status = 'booked'",
-        [id, date],
+        `UPDATE bookings
+            SET status = 'cancelled', cancelled_at = now(), cancelled_by = $3
+          WHERE slot_id = $1 AND lesson_date = $2 AND status = 'booked'`,
+        [id, date, actor],
       );
     });
     res.json({ ok: true });
@@ -394,7 +431,7 @@ slotsRouter.post(
 
     const { rows } = await query(
       'SELECT * FROM slots WHERE id = $1 AND teacher_id = $2',
-      [id, req.user.id],
+      [id, req.scheduleTeacherId],
     );
     const slot = rows[0];
     if (!slot) throw new HttpError(404, 'Slot not found.');
@@ -416,11 +453,22 @@ slotsRouter.post(
     const hasPastInSeries = !seriesStart || fromDate > seriesStart;
     const previousOccurrence = addDays(fromDate, -7);
 
+    const requested = await maybeRequestCancellation(req, {
+      slotId: id,
+      action: 'series_end',
+      lessonDate: fromDate,
+      fromDate,
+    });
+    if (requested) {
+      res.json(requested);
+      return;
+    }
+
     await withTransaction(async (client) => {
       // Cancel future one-off bookings from fromDate forward.
       await client.query(
         `UPDATE bookings
-            SET status = 'cancelled', cancelled_at = now()
+            SET status = 'cancelled', cancelled_at = now(), cancelled_by = 'closed'
           WHERE slot_id = $1 AND lesson_date >= $2 AND status = 'booked'`,
         [id, fromDate],
       );
@@ -456,9 +504,10 @@ slotsRouter.delete(
 
     const { rows } = await query(
       'SELECT id FROM slots WHERE id = $1 AND teacher_id = $2',
-      [id, req.user.id],
+      [id, req.scheduleTeacherId],
     );
     if (!rows[0]) throw new HttpError(404, 'Slot not found.');
+    await assertCoachMayEdit(req);
 
     await query(
       'DELETE FROM slot_exceptions WHERE slot_id = $1 AND exception_date = $2',
@@ -472,13 +521,23 @@ slotsRouter.delete(
   '/:id',
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
-    const { rowCount } = await query(
-      'DELETE FROM slots WHERE id = $1 AND teacher_id = $2',
-      [id, req.user.id],
+    const { rows } = await query(
+      'SELECT * FROM slots WHERE id = $1 AND teacher_id = $2',
+      [id, req.scheduleTeacherId],
     );
-    if (!rowCount) {
-      throw new HttpError(404, 'Slot not found.');
+    if (!rows[0]) throw new HttpError(404, 'Slot not found.');
+
+    const requested = await maybeRequestCancellation(req, {
+      slotId: id,
+      action: 'slot_delete',
+      lessonDate: rows[0].one_off_date ? fmtDate(rows[0].one_off_date) : null,
+    });
+    if (requested) {
+      res.json(requested);
+      return;
     }
+
+    await query('DELETE FROM slots WHERE id = $1 AND teacher_id = $2', [id, req.scheduleTeacherId]);
     res.json({ ok: true });
   }),
 );

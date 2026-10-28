@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
@@ -29,30 +30,37 @@ function weekdaySortIndex(weekday) {
   return i === -1 ? 99 : i;
 }
 
-function exceptionKind(exceptions, slotId, date) {
-  return exceptions.find((e) => e.slotId === slotId && e.date === date)?.kind || null;
+function exceptionRecord(exceptions, slotId, date) {
+  return exceptions.find((e) => e.slotId === slotId && e.date === date) || null;
 }
 
 /** Merge weekly spots and one-off bookings, ordered Monday → Sunday then by time. */
 function mergeWeekLessons(data, weekStart) {
   const { bookings = [], recurring = [], exceptions = [] } = data || {};
   const items = [
-    ...recurring.map((r) => {
+    ...recurring.flatMap((r) => {
       const date = r.lessonDate || dateForWeekday(weekStart, r.weekday);
-      return {
+      const exception = exceptionRecord(exceptions, r.slotId, date);
+      if (exception?.cancelledBy === 'studio') return [];
+      const undoable = exception?.cancelledBy === 'student' || exception?.cancelledBy === 'teacher';
+      const cancelled = undoable && (exception.kind === 'skipped' || exception.kind === 'blocked');
+      return [{
         key: `rec-${r.id}`,
         kind: 'recurring',
         weekday: r.weekday,
         date,
         startTime: r.startTime,
         durationMin: r.durationMin,
-        exception: exceptionKind(exceptions, r.slotId, date),
+        exception: exception?.kind || null,
+        cancelled,
+        cancelledBy: exception?.cancelledBy || null,
+        canUndo: cancelled && !isSlotPast(date, r.startTime),
         student: r.student,
         paymentPartner: r.paymentPartner,
         paid: r.paid,
         partnerPaid: r.partnerPaid,
         source: r,
-      };
+      }];
     }),
     ...bookings.map((b) => ({
       key: `bk-${b.id}`,
@@ -62,6 +70,9 @@ function mergeWeekLessons(data, weekStart) {
       startTime: b.startTime,
       durationMin: b.durationMin,
       exception: null,
+      cancelled: b.status === 'cancelled',
+      cancelledBy: b.cancelledBy || null,
+      canUndo: b.status === 'cancelled' && b.canUndo === true && !isSlotPast(b.lessonDate, b.startTime),
       student: b.student,
       paymentPartner: b.paymentPartner,
       paid: b.paid,
@@ -146,6 +157,21 @@ function teacherLessonCalendarTarget(student, lessonDate, startTime, durationMin
   };
 }
 
+function lessonRequested(requests, item) {
+  return (requests || []).some((request) => {
+    if (request.slotId !== item.source.slotId) return false;
+    if (item.kind === 'booking') {
+      if (request.bookingId) return request.bookingId === item.source.id;
+      return request.lessonDate === item.date;
+    }
+    if (request.recurringAssignmentId && request.recurringAssignmentId !== item.source.id) {
+      return false;
+    }
+    if (request.lessonDate && request.lessonDate !== item.date) return false;
+    return true;
+  });
+}
+
 function LessonRow({
   item,
   whenLabel,
@@ -154,8 +180,12 @@ function LessonRow({
   paidPending,
   onAddToCalendar,
   onManage,
+  onUndo,
+  undoPending = false,
   past = false,
   upNext = false,
+  requestMode = false,
+  requested = false,
 }) {
   const rowClass = ['list-row'];
   if (past) rowClass.push('is-past');
@@ -167,7 +197,21 @@ function LessonRow({
         <div>{fmtTimeRange(item.startTime, item.durationMin)}</div>
       </div>
       <StudentLessonInfo student={item.student} paymentPartner={item.paymentPartner} />
-      {item.exception === 'blocked' ? (
+      {item.cancelled ? (
+        <div className="row" style={{ gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <span className="pill pill-warn">Cancelled</span>
+          {item.canUndo && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={onUndo}
+              disabled={undoPending}
+            >
+              Undo
+            </button>
+          )}
+        </div>
+      ) : item.exception === 'blocked' ? (
         <span className="pill pill-warn">Unavailable this week</span>
       ) : item.exception === 'skipped' ? (
         <span className="pill pill-warn">Cancelled this week</span>
@@ -209,8 +253,9 @@ function LessonRow({
           >
             Calendar
           </button>
+          {requested && <span className="pill pill-warn">Cancellation requested</span>}
           <button type="button" className="btn btn-ghost btn-sm" onClick={onManage}>
-            Cancel…
+            {requestMode ? 'Request…' : 'Cancel…'}
           </button>
         </div>
       )}
@@ -228,10 +273,27 @@ const TIME_OPTIONS = (() => {
   return out;
 })();
 
-export default function TeacherDashboard() {
+export default function TeacherDashboard({ ownerTeacher = null }) {
   const { user } = useAuth();
   const toast = useToast();
   const queryClient = useQueryClient();
+  const teacherId = ownerTeacher?.id ?? user?.id;
+  const scope = ownerTeacher ? ownerTeacher.id : 'self';
+  const withTeacher = (path) => {
+    if (!ownerTeacher) return path;
+    return `${path}${path.includes('?') ? '&' : '?'}teacherId=${ownerTeacher.id}`;
+  };
+  const noteResult = (data, done) => {
+    if (data?.requested) {
+      toast(
+        data.alreadyRequested
+          ? 'That cancellation is already requested. Your studio has the details.'
+          : 'Cancellation requested. Your studio has been emailed, and the lesson stays until they handle it.',
+      );
+    } else {
+      toast(done);
+    }
+  };
 
   const baseMonday = getMonday(todayISO());
   const [weekOffset, setWeekOffset] = useState(0);
@@ -240,39 +302,51 @@ export default function TeacherDashboard() {
   const [calendarTarget, setCalendarTarget] = useState(null);
 
   const slotsQuery = useQuery({
-    queryKey: ['slots', weekStart],
-    queryFn: () => api(`/slots?week=${weekStart}`),
+    queryKey: ['slots', scope, weekStart],
+    queryFn: () => api(withTeacher(`/slots?week=${weekStart}`)),
   });
   const scheduleQuery = useQuery({
-    queryKey: ['teacher-schedule', user.id, weekStart],
-    queryFn: () => api(`/teachers/${user.id}/schedule?week=${weekStart}`),
+    queryKey: ['teacher-schedule', teacherId, weekStart],
+    queryFn: () => api(`/teachers/${teacherId}/schedule?week=${weekStart}`),
     refetchInterval: 20000,
   });
   const bookingsQuery = useQuery({
-    queryKey: ['teacher-bookings', weekStart],
-    queryFn: () => api(`/teachers/me/bookings?week=${weekStart}`),
+    queryKey: ['teacher-bookings', scope, weekStart],
+    queryFn: () => api(withTeacher(`/teachers/me/bookings?week=${weekStart}`)),
     refetchInterval: 20000,
   });
   const todayBookingsQuery = useQuery({
-    queryKey: ['teacher-bookings', baseMonday],
-    queryFn: () => api(`/teachers/me/bookings?week=${baseMonday}`),
+    queryKey: ['teacher-bookings', scope, baseMonday],
+    queryFn: () => api(withTeacher(`/teachers/me/bookings?week=${baseMonday}`)),
     refetchInterval: 20000,
   });
   const pendingQuery = useQuery({
-    queryKey: ['pending'],
-    queryFn: () => api('/recurring/pending'),
+    queryKey: ['pending', scope],
+    queryFn: () => api(withTeacher('/recurring/pending')),
     refetchInterval: 20000,
   });
   const invitesQuery = useQuery({
-    queryKey: ['teacher-invites', weekStart],
-    queryFn: () => api(`/invites?week=${weekStart}`),
+    queryKey: ['teacher-invites', scope, weekStart],
+    queryFn: () => api(withTeacher(`/invites?week=${weekStart}`)),
     refetchInterval: 20000,
   });
   const myStudiosQuery = useQuery({
-    queryKey: ['my-studios'],
-    queryFn: () => api('/teachers/me/studios'),
+    queryKey: ownerTeacher ? ['owner-studio'] : ['my-studios'],
+    queryFn: () => (ownerTeacher ? api('/owner/studio') : api('/teachers/me/studios')),
   });
-  const studioSlug = myStudiosQuery.data?.studios?.[0]?.slug;
+  const studios = ownerTeacher
+    ? myStudiosQuery.data?.studio
+      ? [{
+          id: myStudiosQuery.data.studio.id,
+          name: myStudiosQuery.data.studio.name,
+          slug: myStudiosQuery.data.studio.slug,
+        }]
+      : []
+    : myStudiosQuery.data?.studios || [];
+  const studioSlug = studios[0]?.slug;
+  const viewOnly =
+    !ownerTeacher &&
+    (bookingsQuery.data?.ownerManaged === true || todayBookingsQuery.data?.ownerManaged === true);
   const studioDetailQuery = useQuery({
     queryKey: ['studio', studioSlug],
     queryFn: () => api(`/studios/${studioSlug}`),
@@ -288,7 +362,7 @@ export default function TeacherDashboard() {
   };
 
   const createSlot = useMutation({
-    mutationFn: (body) => api('/slots', { method: 'POST', body }),
+    mutationFn: (body) => api(withTeacher('/slots'), { method: 'POST', body }),
     onSuccess: (_d, body) => {
       toast(body.date ? 'One-time lesson added.' : 'Weekly lesson time added.');
       invalidateAll();
@@ -297,9 +371,9 @@ export default function TeacherDashboard() {
   });
 
   const removeSlot = useMutation({
-    mutationFn: (id) => api(`/slots/${id}`, { method: 'DELETE' }),
-    onSuccess: () => {
-      toast('Time removed.');
+    mutationFn: (id) => api(withTeacher(`/slots/${id}`), { method: 'DELETE' }),
+    onSuccess: (data) => {
+      noteResult(data, 'Time removed.');
       invalidateAll();
     },
     onError: (err) => toast(err.message),
@@ -307,45 +381,65 @@ export default function TeacherDashboard() {
 
   const endSeries = useMutation({
     mutationFn: ({ slotId, fromDate }) =>
-      api(`/slots/${slotId}/end-series`, { method: 'POST', body: { fromDate } }),
-    onSuccess: () => {
-      toast('Removed this week and all future times.');
+      api(withTeacher(`/slots/${slotId}/end-series`), { method: 'POST', body: { fromDate } }),
+    onSuccess: (data) => {
+      noteResult(data, 'Removed this week and all future times.');
       invalidateAll();
     },
     onError: (err) => toast(err.message),
   });
 
-  const cancelBooking = useMutation({
-    mutationFn: (id) => api(`/bookings/${id}`, { method: 'DELETE' }),
+  const undoCancellation = useMutation({
+    mutationFn: (item) => {
+      if (item.kind === 'booking') {
+        return api(withTeacher(`/bookings/${item.source.id}/undo`), { method: 'POST' });
+      }
+      return api(withTeacher(`/recurring/${item.source.id}/undo`), {
+        method: 'POST',
+        body: { date: item.date },
+      });
+    },
     onSuccess: () => {
-      toast('Booking cancelled.');
+      toast('Lesson restored.');
+      invalidateAll();
+      queryClient.invalidateQueries({ queryKey: ['my-lessons'] });
+    },
+    onError: (err) => toast(err.message),
+  });
+
+  const cancelBooking = useMutation({
+    mutationFn: (id) => api(withTeacher(`/bookings/${id}`), { method: 'DELETE' }),
+    onSuccess: (data) => {
+      noteResult(data, 'Booking cancelled.');
       invalidateAll();
     },
     onError: (err) => toast(err.message),
   });
 
   const skipRecurring = useMutation({
-    mutationFn: ({ id, date }) => api(`/recurring/${id}/skip`, { method: 'POST', body: { date } }),
-    onSuccess: () => {
-      toast('Cancelled for that week. The slot has reopened.');
+    mutationFn: ({ id, date }) =>
+      api(withTeacher(`/recurring/${id}/skip`), { method: 'POST', body: { date } }),
+    onSuccess: (data) => {
+      noteResult(data, 'Cancelled for that week. The slot has reopened.');
       invalidateAll();
     },
     onError: (err) => toast(err.message),
   });
 
   const removeRecurring = useMutation({
-    mutationFn: (id) => api(`/recurring/${id}`, { method: 'DELETE' }),
-    onSuccess: () => {
-      toast('Removed from the weekly slot.');
+    mutationFn: (id) => api(withTeacher(`/recurring/${id}`), { method: 'DELETE' }),
+    onSuccess: (data) => {
+      noteResult(data, 'Removed from the weekly slot.');
       invalidateAll();
     },
     onError: (err) => toast(err.message),
   });
 
   const blockSlot = useMutation({
-    mutationFn: ({ slotId, date }) => api(`/slots/${slotId}/block`, { method: 'POST', body: { date } }),
-    onSuccess: () => {
-      toast('Time removed for this week only.');
+    mutationFn: ({ slotId, date }) =>
+      api(withTeacher(`/slots/${slotId}/block`), { method: 'POST', body: { date } }),
+    onSuccess: (data) => {
+      noteResult(data, 'Time removed for this week only.');
       invalidateAll();
     },
     onError: (err) => toast(err.message),
@@ -353,7 +447,7 @@ export default function TeacherDashboard() {
 
   const unblockSlot = useMutation({
     mutationFn: ({ slotId, date }) =>
-      api(`/slots/${slotId}/exceptions`, { method: 'DELETE', body: { date } }),
+      api(withTeacher(`/slots/${slotId}/exceptions`), { method: 'DELETE', body: { date } }),
     onSuccess: () => {
       toast('Time restored for this week.');
       invalidateAll();
@@ -362,14 +456,15 @@ export default function TeacherDashboard() {
   });
 
   const paidMutation = useMutation({
-    mutationFn: ({ id, paid }) => api(`/bookings/${id}/paid`, { method: 'PATCH', body: { paid } }),
+    mutationFn: ({ id, paid }) =>
+      api(withTeacher(`/bookings/${id}/paid`), { method: 'PATCH', body: { paid } }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['teacher-bookings'] }),
     onError: (err) => toast(err.message),
   });
 
   const recurringPaidMutation = useMutation({
     mutationFn: ({ id, date, paid }) =>
-      api(`/recurring/${id}/paid`, { method: 'PATCH', body: { date, paid } }),
+      api(withTeacher(`/recurring/${id}/paid`), { method: 'PATCH', body: { date, paid } }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['teacher-bookings'] });
     },
@@ -377,7 +472,7 @@ export default function TeacherDashboard() {
   });
 
   const decide = useMutation({
-    mutationFn: ({ id, action }) => api(`/recurring/${id}/${action}`, { method: 'POST' }),
+    mutationFn: ({ id, action }) => api(withTeacher(`/recurring/${id}/${action}`), { method: 'POST' }),
     onSuccess: (data, { action }) => {
       const messages = {
         approve: data?.startsOn
@@ -393,7 +488,7 @@ export default function TeacherDashboard() {
   });
 
   const lookupStudent = useMutation({
-    mutationFn: (email) => api(`/invites/lookup?email=${encodeURIComponent(email)}`),
+    mutationFn: (email) => api(withTeacher(`/invites/lookup?email=${encodeURIComponent(email)}`)),
     onError: (err) => {
       setDialog((d) =>
         d?.type === 'scheduleStudent'
@@ -405,7 +500,7 @@ export default function TeacherDashboard() {
 
   const scheduleInvite = useMutation({
     mutationFn: ({ slotId, lessonDate, email, childName }) =>
-      api('/invites', {
+      api(withTeacher('/invites'), {
         method: 'POST',
         body: { slotId, lessonDate, email, childName: childName || null },
       }),
@@ -420,9 +515,9 @@ export default function TeacherDashboard() {
   });
 
   const cancelInvite = useMutation({
-    mutationFn: (id) => api(`/invites/${id}`, { method: 'DELETE' }),
-    onSuccess: () => {
-      toast('Invite cancelled. The time is open again.');
+    mutationFn: (id) => api(withTeacher(`/invites/${id}`), { method: 'DELETE' }),
+    onSuccess: (data) => {
+      noteResult(data, 'Invite cancelled. The time is open again.');
       invalidateAll();
     },
     onError: (err) => toast(err.message),
@@ -454,14 +549,29 @@ export default function TeacherDashboard() {
   const openUpcoming = openSlots.filter((s) => !isSlotPast(s.lessonDate, s.startTime));
   const studioClasses = studioDetailQuery.data?.classSchedules || [];
   const studioRooms = studioDetailQuery.data?.rooms || [];
-  const studioName = myStudiosQuery.data?.studios?.[0]?.name;
+  const studioName = studios[0]?.name;
 
   return (
     <div className="container">
-      <h1 className="page-title">Your schedule</h1>
+      {ownerTeacher && (
+        <p style={{ marginTop: 0 }}>
+          <Link to="/owner">← Studio</Link>
+        </p>
+      )}
+      <h1 className="page-title">
+        {ownerTeacher ? `${ownerTeacher.fullName}’s schedule` : 'Your schedule'}
+      </h1>
       <p className="page-sub">
-        Manage lesson times for the week you&apos;re viewing, bookings, and weekly spot requests.
+        {ownerTeacher
+          ? 'Manage this coach’s lesson times, bookings, and weekly spot requests.'
+          : 'Manage lesson times for the week you’re viewing, bookings, and weekly spot requests.'}
       </p>
+      {viewOnly && (
+        <p className="managed-banner">
+          Your studio manages this schedule. You can view it and request a cancellation. The studio
+          is emailed, and the lesson stays until they handle it.
+        </p>
+      )}
 
       {(studioRooms.length > 0 || studioClasses.length > 0) && (
         <StudioRoomsSchedule
@@ -521,33 +631,39 @@ export default function TeacherDashboard() {
                   </div>
                   <StudentLessonInfo student={p.student} paymentPartner={p.paymentPartner} />
                 </div>
-                <div className="request-actions">
-                  <button
-                    type="button"
-                    className="btn btn-green btn-sm"
-                    onClick={() => decide.mutate({ id: p.id, action: 'approve' })}
-                    disabled={decide.isPending}
-                  >
-                    Accept weekly
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm"
-                    title={startPassed ? 'That date has already passed' : 'Book only the requested date'}
-                    onClick={() => decide.mutate({ id: p.id, action: 'one-time' })}
-                    disabled={decide.isPending || startPassed}
-                  >
-                    This date only
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => decide.mutate({ id: p.id, action: 'decline' })}
-                    disabled={decide.isPending}
-                  >
-                    Decline
-                  </button>
-                </div>
+                {viewOnly ? (
+                  <span className="muted" style={{ fontSize: '13px' }}>
+                    The studio handles this request.
+                  </span>
+                ) : (
+                  <div className="request-actions">
+                    <button
+                      type="button"
+                      className="btn btn-green btn-sm"
+                      onClick={() => decide.mutate({ id: p.id, action: 'approve' })}
+                      disabled={decide.isPending}
+                    >
+                      Accept weekly
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      title={startPassed ? 'That date has already passed' : 'Book only the requested date'}
+                      onClick={() => decide.mutate({ id: p.id, action: 'one-time' })}
+                      disabled={decide.isPending || startPassed}
+                    >
+                      This date only
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => decide.mutate({ id: p.id, action: 'decline' })}
+                      disabled={decide.isPending}
+                    >
+                      Decline
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}
@@ -565,7 +681,9 @@ export default function TeacherDashboard() {
             <TodaySchedule
               data={todayBookingsQuery.data}
               weekStart={baseMonday}
-              trackPayments={todayBookingsQuery.data.trackPayments}
+              trackPayments={viewOnly ? false : todayBookingsQuery.data.trackPayments}
+              requestMode={viewOnly}
+              cancellationRequests={todayBookingsQuery.data.cancellationRequests}
               onManageBooking={(b) => setDialog({ type: 'booking', booking: b })}
               onManageRecurring={(r) =>
                 setDialog({ type: 'recurring', recurring: r, weekStart: baseMonday })
@@ -576,6 +694,8 @@ export default function TeacherDashboard() {
               }
               paidPending={paidMutation.isPending || recurringPaidMutation.isPending}
               onAddToCalendar={setCalendarTarget}
+              onUndo={(item) => undoCancellation.mutate(item)}
+              undoPending={undoCancellation.isPending}
             />
           )}
         </div>
@@ -586,7 +706,9 @@ export default function TeacherDashboard() {
             <BookingsList
               data={bookingsQuery.data}
               weekStart={weekStart}
-              trackPayments={bookingsQuery.data.trackPayments}
+              trackPayments={viewOnly ? false : bookingsQuery.data.trackPayments}
+              requestMode={viewOnly}
+              cancellationRequests={bookingsQuery.data.cancellationRequests}
               onManageBooking={(b) => setDialog({ type: 'booking', booking: b })}
               onManageRecurring={(r) => setDialog({ type: 'recurring', recurring: r })}
               onPaidChange={(id, paid) => paidMutation.mutate({ id, paid })}
@@ -595,6 +717,8 @@ export default function TeacherDashboard() {
               }
               paidPending={paidMutation.isPending || recurringPaidMutation.isPending}
               onAddToCalendar={setCalendarTarget}
+              onUndo={(item) => undoCancellation.mutate(item)}
+              undoPending={undoCancellation.isPending}
             />
           )}
         </div>
@@ -637,6 +761,7 @@ export default function TeacherDashboard() {
                       <span className="t">
                         {fmtTime(s.startTime)}
                         {tag && <em className="chip-tag">{tag}</em>}
+                        {s.cancellationRequested && <em className="chip-tag">requested</em>}
                       </span>
                       <button
                         type="button"
@@ -649,7 +774,7 @@ export default function TeacherDashboard() {
                     </div>
                   );
                 })}
-                {available.length > 0 && (
+                {!viewOnly && available.length > 0 && (
                   <div className="time-add">
                     <select
                       value=""
@@ -688,6 +813,7 @@ export default function TeacherDashboard() {
             <OpenTimesList
               slots={openSlots}
               pendingInvites={invitesQuery.data?.invites || []}
+              allowSchedule={!viewOnly}
               onSchedule={(slot) =>
                 setDialog({
                   type: 'scheduleStudent',
@@ -706,21 +832,26 @@ export default function TeacherDashboard() {
       </div>
 
       <SharePanel
-        teacherId={user.id}
-        studios={myStudiosQuery.data?.studios || []}
+        teacherId={teacherId}
+        studios={studios}
         openSlots={openUpcoming}
         weekLabel={weekRangeLabel(weekStart)}
       />
 
       {dialog?.type === 'recurring' && (
         <Modal
-          title={`Cancel ${lessonPersonName(dialog.recurring.student)}'s lesson`}
+          title={`${viewOnly ? 'Request cancellation of ' : 'Cancel '}${lessonPersonName(dialog.recurring.student)}'s lesson`}
           subtitle={`${WEEKDAYS[dialog.recurring.weekday]} ${fmtTimeRange(
             dialog.recurring.startTime,
             dialog.recurring.durationMin,
           )} · week of ${weekRangeLabel(dialog.weekStart || weekStart)}`}
           onClose={() => setDialog(null)}
         >
+          {viewOnly && (
+            <p className="muted" style={{ fontSize: '13px', marginTop: 0 }}>
+              This emails your studio. The lesson stays on your schedule until they handle it.
+            </p>
+          )}
           <ModalOption
             label="Cancel this week only"
             description="The student skips this week; the slot reopens for others."
@@ -760,13 +891,18 @@ export default function TeacherDashboard() {
 
       {dialog?.type === 'booking' && (
         <Modal
-          title={`Cancel ${lessonPersonName(dialog.booking.student)}'s lesson`}
+          title={`${viewOnly ? 'Request cancellation of ' : 'Cancel '}${lessonPersonName(dialog.booking.student)}'s lesson`}
           subtitle={`${fmtDate(dialog.booking.lessonDate, { weekday: 'long', month: 'short', day: 'numeric' })} · ${fmtTimeRange(
             dialog.booking.startTime,
             dialog.booking.durationMin,
           )}`}
           onClose={() => setDialog(null)}
         >
+          {viewOnly && (
+            <p className="muted" style={{ fontSize: '13px', marginTop: 0 }}>
+              This emails your studio. The lesson stays on your schedule until they handle it.
+            </p>
+          )}
           <ModalOption
             label="Cancel this lesson"
             description="Cancels the booking; the slot reopens for others."
@@ -809,6 +945,7 @@ export default function TeacherDashboard() {
           slot={dialog.slot}
           weekStart={weekStart}
           dialogBusy={dialogBusy}
+          requestMode={viewOnly}
           onClose={() => setDialog(null)}
           onRemoveOneOff={() => {
             removeSlot.mutate(dialog.slot.id);
@@ -1018,6 +1155,10 @@ function BookingsList({
   onRecurringPaidChange,
   paidPending,
   onAddToCalendar,
+  onUndo,
+  undoPending = false,
+  requestMode = false,
+  cancellationRequests = [],
 }) {
   const items = mergeWeekLessons(data, weekStart);
   if (!items.length) {
@@ -1043,6 +1184,10 @@ function BookingsList({
               paidPending={paidPending}
               onAddToCalendar={onAddToCalendar}
               onManage={lessonManageHandler(item, onManageBooking, onManageRecurring)}
+              onUndo={() => onUndo(item)}
+              undoPending={undoPending}
+              requestMode={requestMode}
+              requested={lessonRequested(cancellationRequests, item)}
             />
           ))}
         </div>
@@ -1061,13 +1206,19 @@ function TodaySchedule({
   onRecurringPaidChange,
   paidPending,
   onAddToCalendar,
+  onUndo,
+  undoPending = false,
+  requestMode = false,
+  cancellationRequests = [],
 }) {
   const today = todayISO();
   const items = mergeWeekLessons(data, weekStart).filter((item) => item.date === today);
   if (!items.length) {
     return <p className="muted" style={{ fontSize: '14px' }}>No lessons scheduled for today.</p>;
   }
-  const nextKey = items.find((item) => !item.exception && !isSlotPast(item.date, item.startTime))?.key;
+  const nextKey = items.find(
+    (item) => !item.cancelled && !item.exception && !isSlotPast(item.date, item.startTime),
+  )?.key;
   return (
     <>
       {items.map((item) => (
@@ -1080,15 +1231,26 @@ function TodaySchedule({
           paidPending={paidPending}
           onAddToCalendar={onAddToCalendar}
           onManage={lessonManageHandler(item, onManageBooking, onManageRecurring)}
-          past={!item.exception && isSlotPast(item.date, item.startTime)}
+          onUndo={() => onUndo(item)}
+          undoPending={undoPending}
+          past={!item.cancelled && !item.exception && isSlotPast(item.date, item.startTime)}
           upNext={item.key === nextKey}
+          requestMode={requestMode}
+          requested={lessonRequested(cancellationRequests, item)}
         />
       ))}
     </>
   );
 }
 
-function OpenTimesList({ slots, pendingInvites, onSchedule, onCancelInvite, cancelPending }) {
+function OpenTimesList({
+  slots,
+  pendingInvites,
+  onSchedule,
+  onCancelInvite,
+  cancelPending,
+  allowSchedule = true,
+}) {
   const groups = [];
   const sorted = [...slots].sort(
     (a, b) =>
@@ -1161,8 +1323,8 @@ function OpenTimesList({ slots, pendingInvites, onSchedule, onCancelInvite, canc
                   <div>{fmtTimeRange(slot.startTime, slot.durationMin)}</div>
                 </div>
                 <div className="open-time-actions">
-                  {past ? (
-                    <span className="muted">Passed</span>
+                  {past || !allowSchedule ? (
+                    <span className="muted">{past ? 'Passed' : 'Studio schedules this'}</span>
                   ) : (
                     <button
                       type="button"
@@ -1361,6 +1523,7 @@ function DeleteSlotDialog({
   onBlock,
   onEndSeries,
   onUnblock,
+  requestMode = false,
 }) {
   const date = dateForWeekday(weekStart, slot.weekday);
   const past = date < todayISO();
@@ -1372,6 +1535,11 @@ function DeleteSlotDialog({
         subtitle={`${SHORT[slot.weekday]} ${fmtTime(slot.startTime)} · ${fmtDate(date)}`}
         onClose={onClose}
       >
+        {requestMode && (
+          <p className="muted" style={{ fontSize: '13px', marginTop: 0 }}>
+            This emails your studio. The lesson stays on your schedule until they handle it.
+          </p>
+        )}
         <ModalOption
           label="Delete this slot"
           description="Removes this one-time lesson time and cancels any lesson on it."
@@ -1396,12 +1564,19 @@ function DeleteSlotDialog({
         subtitle={`${SHORT[slot.weekday]} ${fmtTime(slot.startTime)} · week of ${weekRangeLabel(weekStart)}`}
         onClose={onClose}
       >
-        <ModalOption
-          label="Restore this week"
-          description="Makes this time available again for this week."
-          disabled={dialogBusy}
-          onClick={onUnblock}
-        />
+        {requestMode && (
+          <p className="muted" style={{ fontSize: '13px', marginTop: 0 }}>
+            This emails your studio. The lesson stays on your schedule until they handle it.
+          </p>
+        )}
+        {!requestMode && slot.blockCancelledBy !== 'studio' && (
+          <ModalOption
+            label="Restore this week"
+            description="Makes this time available again for this week."
+            disabled={dialogBusy}
+            onClick={onUnblock}
+          />
+        )}
         <ModalOption
           label="Delete this week and all future"
           description="Ends the series from this week forward. Past weeks stay in history."
@@ -1425,6 +1600,11 @@ function DeleteSlotDialog({
       subtitle={`${SHORT[slot.weekday]} ${fmtTime(slot.startTime)} · week of ${weekRangeLabel(weekStart)}`}
       onClose={onClose}
     >
+      {requestMode && (
+        <p className="muted" style={{ fontSize: '13px', marginTop: 0 }}>
+          This emails your studio. The lesson stays on your schedule until they handle it.
+        </p>
+      )}
       <ModalOption
         label="Delete this week only"
         description={

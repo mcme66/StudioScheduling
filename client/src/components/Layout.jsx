@@ -38,6 +38,9 @@ export default function Layout() {
               <NavLink to="/owner" className="header-nav-pill">
                 Dashboard
               </NavLink>
+              <NavLink to="/owner/requests" className="header-nav-pill">
+                Requests
+              </NavLink>
               <Link to="/profile" className="header-nav-pill">
                 {user.fullName}
               </Link>

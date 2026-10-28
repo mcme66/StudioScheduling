@@ -2,7 +2,9 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { query, withTransaction } from '../db.js';
 import { asyncHandler, HttpError } from '../middleware/error.js';
-import { requireAuth, requireRole } from '../middleware/auth.js';
+import { requireAuth } from '../middleware/auth.js';
+import { requireScheduleTeacher } from '../middleware/scheduleTeacher.js';
+import { assertCoachMayEdit, maybeRequestCancellation } from '../services/coachManagement.js';
 import {
   isValidDateStr,
   todayISO,
@@ -88,8 +90,9 @@ const lookupQuerySchema = z.object({
 // Teacher: see whether an email belongs to a student, and list children if it's a parent.
 invitesRouter.get(
   '/lookup',
-  requireRole('teacher'),
+  requireScheduleTeacher,
   asyncHandler(async (req, res) => {
+    await assertCoachMayEdit(req);
     const { email } = lookupQuerySchema.parse({ email: req.query.email });
     const normalizedEmail = email.toLowerCase();
 
@@ -104,7 +107,7 @@ invitesRouter.get(
     }
 
     const { rows: teacherRows } = await query('SELECT email FROM teachers WHERE id = $1', [
-      req.user.id,
+      req.scheduleTeacherId,
     ]);
     if (teacherRows[0] && teacherRows[0].email.toLowerCase() === student.email.toLowerCase()) {
       throw new HttpError(400, 'You cannot schedule a lesson for yourself.');
@@ -126,8 +129,9 @@ invitesRouter.get(
 // Teacher: schedule an open slot for a student by email (pending until they accept).
 invitesRouter.post(
   '/',
-  requireRole('teacher'),
+  requireScheduleTeacher,
   asyncHandler(async (req, res) => {
+    await assertCoachMayEdit(req);
     const { slotId, lessonDate, email, childName: requestedChildName } = createSchema.parse(
       req.body,
     );
@@ -148,7 +152,7 @@ invitesRouter.post(
     }
 
     const { rows: teacherRows } = await query('SELECT email FROM teachers WHERE id = $1', [
-      req.user.id,
+      req.scheduleTeacherId,
     ]);
     if (teacherRows[0] && teacherRows[0].email.toLowerCase() === student.email.toLowerCase()) {
       throw new HttpError(400, 'You cannot schedule a lesson for yourself.');
@@ -175,7 +179,7 @@ invitesRouter.post(
 
     const invite = await withTransaction(async (client) => {
       const slot = await loadSlotForUpdate(client, slotId);
-      if (slot.teacher_id !== req.user.id) {
+      if (slot.teacher_id !== req.scheduleTeacherId) {
         throw new HttpError(403, 'That lesson time is not on your schedule.');
       }
       await assertSlotOpenOnDate(client, slot, lessonDate, { bookerStudentId: student.id });
@@ -210,19 +214,19 @@ invitesRouter.post(
 // Teacher: pending invites for a week (so they can retract a held slot).
 invitesRouter.get(
   '/',
-  requireRole('teacher'),
+  requireScheduleTeacher,
   asyncHandler(async (req, res) => {
     const weekParam = req.query.week;
-    let params = [req.user.id];
+    let params = [req.scheduleTeacherId];
     let dateFilter = '';
     if (isValidDateStr(weekParam)) {
       const monday = getMonday(weekParam);
       const sunday = dateForWeekday(monday, 0);
       dateFilter = 'AND li.lesson_date BETWEEN $2 AND $3';
-      params = [req.user.id, monday, sunday];
+      params = [req.scheduleTeacherId, monday, sunday];
     } else {
       dateFilter = 'AND li.lesson_date >= $2';
-      params = [req.user.id, todayISO()];
+      params = [req.scheduleTeacherId, todayISO()];
     }
 
     const { rows } = await query(
@@ -407,25 +411,39 @@ invitesRouter.post(
 // Teacher retracts a pending invite so the slot reopens.
 invitesRouter.delete(
   '/:id',
-  requireRole('teacher'),
+  requireScheduleTeacher,
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id < 1) throw new HttpError(400, 'Invalid invite.');
 
-    const { rows } = await query(
-      `UPDATE lesson_invites li
-          SET status = 'cancelled', decided_at = now()
-         FROM slots s
-        WHERE li.id = $1
-          AND li.slot_id = s.id
-          AND s.teacher_id = $2
-          AND li.status = 'pending'
-        RETURNING li.id`,
-      [id, req.user.id],
+    const { rows: pending } = await query(
+      `SELECT li.id, li.slot_id, li.lesson_date
+         FROM lesson_invites li
+         JOIN slots s ON s.id = li.slot_id
+        WHERE li.id = $1 AND s.teacher_id = $2 AND li.status = 'pending'`,
+      [id, req.scheduleTeacherId],
     );
-    if (!rows[0]) {
+    if (!pending[0]) {
       throw new HttpError(404, 'That scheduled lesson is no longer pending.');
     }
+
+    const requested = await maybeRequestCancellation(req, {
+      action: 'invite_cancel',
+      slotId: pending[0].slot_id,
+      lessonDate: fmtDate(pending[0].lesson_date),
+      inviteId: pending[0].id,
+    });
+    if (requested) {
+      res.json(requested);
+      return;
+    }
+
+    await query(
+      `UPDATE lesson_invites
+          SET status = 'cancelled', decided_at = now()
+        WHERE id = $1 AND status = 'pending'`,
+      [id],
+    );
     res.json({ ok: true });
   }),
 );

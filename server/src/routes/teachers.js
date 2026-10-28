@@ -3,6 +3,11 @@ import { z } from 'zod';
 import { query, withTransaction } from '../db.js';
 import { asyncHandler, HttpError } from '../middleware/error.js';
 import { requireRole } from '../middleware/auth.js';
+import { requireScheduleTeacher } from '../middleware/scheduleTeacher.js';
+import {
+  isOwnerManaged,
+  listPendingCancellationRequests,
+} from '../services/coachManagement.js';
 import {
   getMonday,
   dateForWeekday,
@@ -65,7 +70,12 @@ teachersRouter.get(
   asyncHandler(async (req, res) => {
     const { rows } = await query('SELECT * FROM teachers WHERE id = $1', [req.user.id]);
     if (!rows[0]) throw new HttpError(401, 'Account no longer exists.');
-    res.json({ teacher: mapTeacherProfile(rows[0]) });
+    res.json({
+      teacher: {
+        ...mapTeacherProfile(rows[0]),
+        ownerManaged: await isOwnerManaged(req.user.id),
+      },
+    });
   }),
 );
 
@@ -162,22 +172,23 @@ teachersRouter.patch(
 
 teachersRouter.get(
   '/me/bookings',
-  requireRole('teacher'),
+  requireScheduleTeacher,
   asyncHandler(async (req, res) => {
+    const teacherId = req.scheduleTeacherId;
     const weekParam = req.query.week;
-    let bookingsParams = [req.user.id];
+    let bookingsParams = [teacherId];
     let weekFilter = '';
     let weekRange = null;
     if (isValidDateStr(weekParam)) {
       const monday = getMonday(weekParam);
       const sunday = dateForWeekday(monday, 0);
       weekFilter = 'AND b.lesson_date BETWEEN $2 AND $3';
-      bookingsParams = [req.user.id, monday, sunday];
+      bookingsParams = [teacherId, monday, sunday];
       weekRange = { monday, sunday };
     }
 
     const { rows: bookings } = await query(
-      `SELECT b.id, b.lesson_date, b.created_at, b.status, b.paid, b.partner_paid, b.slot_id, b.child_name,
+      `SELECT b.id, b.lesson_date, b.created_at, b.status, b.cancelled_by, b.paid, b.partner_paid, b.slot_id, b.child_name,
               b.payment_partner_id, pp.full_name AS payment_partner_name,
               s.weekday, s.start_time, s.duration_min, s.price_cents,
               st.full_name AS student_name, st.email AS student_email, st.phone AS student_phone
@@ -185,7 +196,11 @@ teachersRouter.get(
          JOIN slots s ON s.id = b.slot_id
          JOIN students st ON st.id = b.student_id
          LEFT JOIN students pp ON pp.id = b.payment_partner_id
-        WHERE s.teacher_id = $1 AND b.status = 'booked' ${weekFilter}
+        WHERE s.teacher_id = $1
+          AND (
+            b.status = 'booked'
+            OR (b.status = 'cancelled' AND b.cancelled_by IN ('student', 'teacher'))
+          ) ${weekFilter}
           AND NOT EXISTS (
             SELECT 1 FROM recurring_assignments ra
              WHERE ra.slot_id = b.slot_id
@@ -202,16 +217,17 @@ teachersRouter.get(
     let exceptions = [];
     if (weekRange) {
       const { rows: excRows } = await query(
-        `SELECT se.slot_id, se.exception_date, se.kind
+        `SELECT se.slot_id, se.exception_date, se.kind, se.cancelled_by
            FROM slot_exceptions se
            JOIN slots s ON s.id = se.slot_id
           WHERE s.teacher_id = $1 AND se.exception_date BETWEEN $2 AND $3`,
-        [req.user.id, weekRange.monday, weekRange.sunday],
+        [teacherId, weekRange.monday, weekRange.sunday],
       );
       exceptions = excRows.map((e) => ({
         slotId: e.slot_id,
         date: fmtDate(e.exception_date),
         kind: e.kind,
+        cancelledBy: e.cancelled_by || null,
       }));
     }
 
@@ -226,7 +242,7 @@ teachersRouter.get(
          LEFT JOIN students pp ON pp.id = ra.payment_partner_id
         WHERE s.teacher_id = $1 AND ra.status = 'approved'
         ORDER BY s.weekday, s.start_time`,
-      [req.user.id],
+      [teacherId],
     );
 
     let recurringPayments = new Map();
@@ -249,12 +265,18 @@ teachersRouter.get(
 
     const { rows: teacherRows } = await query(
       'SELECT track_payments FROM teachers WHERE id = $1',
-      [req.user.id],
+      [teacherId],
     );
     const trackPayments = teacherRows[0]?.track_payments === true;
+    const [ownerManaged, cancellationRequests] = await Promise.all([
+      isOwnerManaged(teacherId),
+      listPendingCancellationRequests(teacherId),
+    ]);
 
     res.json({
       trackPayments,
+      ownerManaged,
+      cancellationRequests,
       exceptions,
       bookings: bookings.map((b) => ({
         id: b.id,
@@ -268,6 +290,9 @@ teachersRouter.get(
         paid: b.paid === true,
         partnerPaid: b.partner_paid === true,
         paymentPartner: b.payment_partner_name ? { name: b.payment_partner_name } : null,
+        status: b.status,
+        cancelledBy: b.cancelled_by || null,
+        canUndo: b.status === 'cancelled' && (b.cancelled_by === 'student' || b.cancelled_by === 'teacher'),
         student: {
           name: b.student_name,
           email: b.student_email,

@@ -12,6 +12,7 @@ import {
   isLessonPast,
 } from '../utils/week.js';
 import { listRooms, listClassSchedules } from '../utils/classSchedules.js';
+import { listCoachTiers } from '../utils/coachTiers.js';
 
 export const studiosRouter = Router();
 
@@ -34,6 +35,8 @@ function mapTeacher(row) {
     defaultPriceCents: row.default_price_cents,
     defaultDurationMin: row.default_duration_min,
     activeSlots: Number(row.active_slots),
+    tierId: row.tier_id || null,
+    tierName: row.tier_name || null,
   };
 }
 
@@ -101,10 +104,11 @@ studiosRouter.get(
 
     const { rows } = await query(
       `SELECT s.id AS slot_id, s.start_time, s.duration_min, s.price_cents,
-              t.id AS teacher_id, t.full_name
+              t.id AS teacher_id, t.full_name, ct.name AS tier_name
          FROM slots s
          JOIN teachers t ON t.id = s.teacher_id
          JOIN teacher_studios ts ON ts.teacher_id = t.id AND ts.studio_id = $1
+         LEFT JOIN coach_tiers ct ON ct.id = ts.tier_id
         WHERE s.active = true
           AND t.is_active
           AND s.weekday = $2
@@ -141,7 +145,7 @@ studiosRouter.get(
             SELECT 1 FROM lesson_invites li
              WHERE li.slot_id = s.id AND li.status = 'pending' AND li.lesson_date = $4::date
           )
-        ORDER BY s.start_time, t.full_name`,
+        ORDER BY s.start_time, ct.sort_order NULLS LAST, t.full_name`,
       [studio.id, weekday, `${from}:00`, date, `${to}:00`],
     );
 
@@ -155,6 +159,7 @@ studiosRouter.get(
           slotId: r.slot_id,
           teacherId: r.teacher_id,
           teacherName: r.full_name,
+          tierName: r.tier_name || null,
           startTime: fmtTime(r.start_time),
           durationMin: r.duration_min,
           priceCents: r.price_cents,
@@ -180,26 +185,30 @@ studiosRouter.get(
     const studio = studioRows[0];
     if (!studio) throw new HttpError(404, 'Studio not found.');
 
-    const [teachers, rooms, classSchedules] = await Promise.all([
+    const [teachers, rooms, classSchedules, tiers] = await Promise.all([
       query(
         `SELECT t.id, t.full_name, t.bio, t.default_price_cents, t.default_duration_min,
+                ct.id AS tier_id, ct.name AS tier_name,
                 COUNT(sl.id) FILTER (WHERE sl.active AND sl.one_off_date IS NULL) AS active_slots
            FROM teachers t
            JOIN teacher_studios ts ON ts.teacher_id = t.id
+           LEFT JOIN coach_tiers ct ON ct.id = ts.tier_id
            LEFT JOIN slots sl ON sl.teacher_id = t.id
           WHERE ts.studio_id = $1
             AND t.is_active
-          GROUP BY t.id
-          ORDER BY t.full_name`,
+          GROUP BY t.id, ct.id
+          ORDER BY ct.sort_order NULLS LAST, ct.id NULLS LAST, t.full_name`,
         [studio.id],
       ).then((r) => r.rows),
       listRooms(studio.id),
       listClassSchedules(studio.id),
+      listCoachTiers(studio.id),
     ]);
 
     res.json({
       studio: mapStudio(studio),
       teachers: teachers.map(mapTeacher),
+      tiers,
       rooms,
       classSchedules,
     });

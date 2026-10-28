@@ -1,0 +1,12 @@
+---
+description: Stop agent-started terminals when a run finishes
+alwaysApply: true
+---
+
+# Spin down terminals after each run
+
+When a task is complete (or you are about to stop), stop every process you started in this conversation — especially long-running ones such as `npm run dev`, Vite, and the API.
+
+- Use the process PID from the terminal session (`taskkill /PID <pid> /T /F` on Windows).
+- Do not leave background servers running after you finish.
+- Do not kill terminals the user started themselves unless they asked you to stop them.
