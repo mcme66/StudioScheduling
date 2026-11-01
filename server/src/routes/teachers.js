@@ -20,6 +20,7 @@ import { getTeacherStudios, teacherListedAtStudio } from '../utils/teacherStudio
 import { sanitizeRichText } from '../utils/sanitizeHtml.js';
 import { ensureLinkedStudentForTeacher, tryResolveBookerStudentId } from '../utils/booker.js';
 import { partnerLinksFor, partnerCoversLesson } from '../utils/partners.js';
+import { notifyOwnerCoachJoined } from '../services/notifications.js';
 
 export const teachersRouter = Router();
 
@@ -99,13 +100,19 @@ teachersRouter.put(
       throw new HttpError(400, 'Invalid studio.');
     }
 
-    await withTransaction(async (client) => {
+    const joined = await withTransaction(async (client) => {
+      const { rows: before } = await client.query(
+        'SELECT 1 FROM teacher_studios WHERE teacher_id = $1 AND studio_id = $2',
+        [req.user.id, studioId],
+      );
       await client.query('DELETE FROM teacher_studios WHERE teacher_id = $1', [req.user.id]);
       await client.query(
         'INSERT INTO teacher_studios (teacher_id, studio_id) VALUES ($1, $2)',
         [req.user.id, studioId],
       );
+      return !before[0];
     });
+    if (joined) await notifyOwnerCoachJoined({ studioId, teacherId: req.user.id });
 
     const studios = await getTeacherStudios(req.user.id);
     res.json({ studios });

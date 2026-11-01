@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { query, withTransaction } from '../db.js';
 import { env } from '../env.js';
 import { sendPasswordReset } from '../services/email.js';
+import { notifyOwnerCoachJoined } from '../services/notifications.js';
 import { asyncHandler, HttpError } from '../middleware/error.js';
 import {
   signToken,
@@ -214,6 +215,7 @@ authRouter.post(
          ON CONFLICT DO NOTHING`,
         [row.id, studioId],
       );
+      await notifyOwnerCoachJoined({ studioId, teacherId: row.id });
     } else {
       const partnerCode = await allocatePartnerCode();
       const result = await query(

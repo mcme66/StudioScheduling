@@ -9,6 +9,14 @@ import {
   weekdayOf,
 } from '../utils/week.js';
 import { sendCancellationRequest, sendLessonMoved } from './email.js';
+import {
+  notifyCoachLessonsAdded,
+  notifyCoachRequestResolved,
+  notifyStudentCoachFilled,
+  notifyStudentsHeldCancelled,
+  notifyStudentsLessonCancelled,
+  notifyStudentsWeeklyDeclined,
+} from './notifications.js';
 
 const pool = { query };
 
@@ -101,7 +109,7 @@ function occupantPayload(student, childName, paymentPartnerId) {
       detail: null,
     };
   }
-  const studentId = student.id ?? student.student_id ?? null;
+  const studentId = student.student_id ?? student.id ?? null;
   const label = childName || student.full_name;
   const parts = [];
   if (childName && student.full_name) parts.push(`Parent: ${student.full_name}`);
@@ -416,16 +424,19 @@ async function endSeries(client, slot, fromDate) {
   const hasPastInSeries = !seriesStart || fromDate > seriesStart;
   const previousOccurrence = addDays(fromDate, -7);
 
-  await client.query(
+  const { rows: booked } = await client.query(
     `UPDATE bookings
         SET status = 'cancelled', cancelled_at = now(), cancelled_by = 'closed'
-      WHERE slot_id = $1 AND lesson_date >= $2 AND status = 'booked'`,
+      WHERE slot_id = $1 AND lesson_date >= $2 AND status = 'booked'
+      RETURNING student_id, child_name, lesson_date`,
     [slot.id, fromDate],
   );
-  await client.query(
-    `UPDATE recurring_assignments
+  const { rows: weekly } = await client.query(
+    `UPDATE recurring_assignments ra
         SET status = 'cancelled', decided_at = now()
-      WHERE slot_id = $1 AND status IN ('pending', 'approved')`,
+       FROM recurring_assignments prev
+      WHERE ra.id = prev.id AND ra.slot_id = $1 AND ra.status IN ('pending', 'approved')
+      RETURNING ra.student_id, ra.child_name, prev.status AS previous_status`,
     [slot.id],
   );
   if (!hasPastInSeries) {
@@ -436,8 +447,34 @@ async function endSeries(client, slot, fromDate) {
       slot.id,
     ]);
   }
+  return {
+    lessons: booked.map(toLesson),
+    weekly: weekly.filter((r) => r.previous_status === 'approved').map(toWeekly),
+    requests: weekly.filter((r) => r.previous_status === 'pending').map(toWeekly),
+  };
 }
 
+const toLesson = (r) => ({ studentId: r.student_id, childName: r.child_name, lessonDate: fmtDate(r.lesson_date) });
+const toWeekly = (r) => ({ studentId: r.student_id, childName: r.child_name });
+
+/** Approved weekly students who still have a lesson on `date` (no skip/block recorded yet). */
+async function weeklyStudentsOnDate(client, slotId, date, recurringAssignmentId = null) {
+  const { rows } = await client.query(
+    `SELECT ra.student_id, ra.child_name, $2::date AS lesson_date
+       FROM recurring_assignments ra
+      WHERE ra.slot_id = $1 AND ra.status = 'approved'
+        AND ($3::int IS NULL OR ra.id = $3)
+        AND (ra.starts_on IS NULL OR ra.starts_on <= $2::date)
+        AND NOT EXISTS (
+          SELECT 1 FROM slot_exceptions se
+           WHERE se.slot_id = ra.slot_id AND se.exception_date = $2::date
+        )`,
+    [slotId, date, recurringAssignmentId],
+  );
+  return rows.map(toLesson);
+}
+
+/** Applies the cancellation and returns the students whose lessons it removed. */
 async function performClear(client, request) {
   const slot = request.slot_id
     ? await one(client, 'SELECT * FROM slots WHERE id = $1', [request.slot_id])
@@ -450,26 +487,29 @@ async function performClear(client, request) {
         `UPDATE bookings
             SET status = 'cancelled', cancelled_at = now(), cancelled_by = 'studio'
           WHERE id = $1 AND status = 'booked'
-          RETURNING id`,
+          RETURNING student_id, child_name, lesson_date`,
         [request.booking_id],
       );
       if (!updated.rows[0]) throw new HttpError(409, 'That lesson is no longer booked.');
-      return;
+      return { lessons: updated.rows.map(toLesson), weekly: [] };
     }
     case 'week_skip': {
       if (!slot) throw gone;
+      const date = fmtDate(request.lesson_date);
+      const lessons = await weeklyStudentsOnDate(client, slot.id, date, request.recurring_assignment_id);
       await client.query(
         `INSERT INTO slot_exceptions (slot_id, exception_date, kind, cancelled_by)
          VALUES ($1, $2, 'skipped', 'studio')
          ON CONFLICT (slot_id, exception_date)
          DO UPDATE SET kind = 'skipped', cancelled_by = 'studio'`,
-        [slot.id, fmtDate(request.lesson_date)],
+        [slot.id, date],
       );
-      return;
+      return { lessons, weekly: [] };
     }
     case 'week_block': {
       if (!slot) throw gone;
       const date = fmtDate(request.lesson_date);
+      const weeklyOnDate = await weeklyStudentsOnDate(client, slot.id, date);
       await client.query(
         `INSERT INTO slot_exceptions (slot_id, exception_date, kind, cancelled_by)
          VALUES ($1, $2, 'blocked', 'studio')
@@ -477,45 +517,71 @@ async function performClear(client, request) {
          DO UPDATE SET kind = 'blocked', cancelled_by = 'studio'`,
         [slot.id, date],
       );
-      await client.query(
+      const { rows: booked } = await client.query(
         `UPDATE bookings
             SET status = 'cancelled', cancelled_at = now(), cancelled_by = 'studio'
-          WHERE slot_id = $1 AND lesson_date = $2 AND status = 'booked'`,
+          WHERE slot_id = $1 AND lesson_date = $2 AND status = 'booked'
+          RETURNING student_id, child_name, lesson_date`,
         [slot.id, date],
       );
-      return;
+      return { lessons: [...weeklyOnDate, ...booked.map(toLesson)], weekly: [] };
     }
     case 'recurring_remove': {
       const updated = await client.query(
-        `UPDATE recurring_assignments
+        `UPDATE recurring_assignments ra
             SET status = 'cancelled', decided_at = now()
-          WHERE id = $1 AND status IN ('approved', 'pending')
-          RETURNING id`,
+           FROM recurring_assignments prev
+          WHERE ra.id = prev.id AND ra.id = $1 AND ra.status IN ('approved', 'pending')
+          RETURNING ra.student_id, ra.child_name, prev.status AS previous_status`,
         [request.recurring_assignment_id],
       );
       if (!updated.rows[0]) throw new HttpError(409, 'That weekly spot is no longer active.');
-      return;
+      return {
+        lessons: [],
+        weekly: updated.rows.filter((r) => r.previous_status === 'approved').map(toWeekly),
+      };
     }
     case 'slot_delete': {
       if (!slot) throw gone;
+      const { rows: booked } = await client.query(
+        `SELECT b.student_id, b.child_name, b.lesson_date
+           FROM bookings b
+          WHERE b.slot_id = $1 AND b.status = 'booked'
+            AND (b.lesson_date + $2::time) > now()`,
+        [slot.id, slot.start_time],
+      );
+      const { rows: assignments } = await client.query(
+        `SELECT student_id, child_name, status FROM recurring_assignments
+          WHERE slot_id = $1 AND status IN ('approved', 'pending')`,
+        [slot.id],
+      );
+      const { rows: held } = await client.query(
+        `SELECT student_id, child_name, lesson_date FROM lesson_invites
+          WHERE slot_id = $1 AND status = 'pending'`,
+        [slot.id],
+      );
       await client.query('DELETE FROM slots WHERE id = $1', [slot.id]);
-      return;
+      return {
+        lessons: booked.map(toLesson),
+        weekly: assignments.filter((r) => r.status === 'approved').map(toWeekly),
+        requests: assignments.filter((r) => r.status === 'pending').map(toWeekly),
+        held: held.map(toLesson),
+      };
     }
     case 'series_end': {
       if (!slot) throw gone;
-      await endSeries(client, slot, fmtDate(request.from_date || request.lesson_date));
-      return;
+      return endSeries(client, slot, fmtDate(request.from_date || request.lesson_date));
     }
     case 'invite_cancel': {
       const updated = await client.query(
         `UPDATE lesson_invites
             SET status = 'cancelled', decided_at = now()
           WHERE id = $1 AND status = 'pending'
-          RETURNING id`,
+          RETURNING id, student_id, child_name, lesson_date`,
         [request.invite_id],
       );
       if (!updated.rows[0]) throw new HttpError(409, 'That held lesson is no longer pending.');
-      return;
+      return { lessons: [], weekly: [], held: updated.rows.map(toLesson) };
     }
     default:
       throw new HttpError(400, 'Unknown cancellation request.');
@@ -809,6 +875,7 @@ async function copyOtherFutureBookings(client, request, fromDate, keepStudentId)
       [booking.id],
     );
   }
+  return rows.map(toLesson);
 }
 
 async function performFill(client, request) {
@@ -833,11 +900,16 @@ async function performFill(client, request) {
         fromDate,
         seriesEnd: fmtDate(original.series_end_date),
       });
-      await copyOtherFutureBookings(client, request, fromDate, moved.studentId || request.student_id);
-    } else {
-      await copyOtherFutureBookings(client, request, fromDate, null);
+      const others = await copyOtherFutureBookings(
+        client,
+        request,
+        fromDate,
+        moved.studentId || request.student_id,
+      );
+      return { series: true, lessonDate: fromDate, movedLessons: others };
     }
-    return { series: true, lessonDate: fromDate };
+    const lessons = await copyOtherFutureBookings(client, request, fromDate, null);
+    return { series: true, lessonDate: fromDate, movedLessons: lessons, occupantInLessons: true };
   }
   if (request.action === 'invite_cancel') {
     const lessonDate = fmtDate(request.lesson_date);
@@ -906,15 +978,47 @@ async function assertSubstitute(client, request, substituteTeacherId) {
 }
 
 export async function applyCancellationRequest(ownerUserId, requestId) {
-  await withTransaction(async (client) => {
-    const request = await lockPendingRequest(client, ownerUserId, requestId);
-    await performClear(client, request);
+  const { request, cleared } = await withTransaction(async (client) => {
+    const locked = await lockPendingRequest(client, ownerUserId, requestId);
+    const result = await performClear(client, locked);
     await client.query(
       `UPDATE cancellation_requests SET status = 'applied', resolved_at = now() WHERE id = $1`,
       [requestId],
     );
+    return { request: locked, cleared: result };
   });
+  await notifyCleared(request, cleared);
+  await notifyRequestResolved(request, 'applied');
   return { ok: true };
+}
+
+async function notifyCleared(request, cleared, skipStudentId = null) {
+  const keep = (s) => s.studentId !== skipStudentId;
+  const pick = (list) => (list || []).filter(keep);
+  const notice = {
+    teacherId: request.teacher_id,
+    weekday: request.weekday,
+    startTime: request.start_time,
+    byStudio: true,
+  };
+  await notifyStudentsLessonCancelled({ ...notice, scope: 'weekly', students: pick(cleared.weekly) });
+  await notifyStudentsLessonCancelled({ ...notice, scope: 'lesson', students: pick(cleared.lessons) });
+  await notifyStudentsWeeklyDeclined({ ...notice, reason: 'closed', students: pick(cleared.requests) });
+  await notifyStudentsHeldCancelled({ ...notice, students: pick(cleared.held) });
+}
+
+function notifyRequestResolved(request, outcome, substituteTeacherId = null) {
+  return notifyCoachRequestResolved({
+    teacherId: request.teacher_id,
+    outcome,
+    actionLabel: ACTION_LABELS[request.action] || request.action,
+    occupantLabel: request.occupant_label,
+    lessonDate: fmtDate(request.from_date || request.lesson_date),
+    weekday: request.weekday,
+    startTime: request.start_time,
+    series: SERIES_ACTIONS.has(request.action) || (request.action === 'slot_delete' && !request.lesson_date),
+    substituteTeacherId,
+  });
 }
 
 export async function dismissCancellationRequest(ownerUserId, requestId) {
@@ -923,10 +1027,11 @@ export async function dismissCancellationRequest(ownerUserId, requestId) {
         SET status = 'dismissed', resolved_at = now()
        FROM studio_owners so
       WHERE cr.id = $1 AND so.id = $2 AND so.studio_id = cr.studio_id AND cr.status = 'pending'
-      RETURNING cr.id`,
+      RETURNING cr.*`,
     [requestId, ownerUserId],
   );
   if (!rows[0]) throw new HttpError(404, 'Request not found.');
+  await notifyRequestResolved(rows[0], 'dismissed');
   return { ok: true };
 }
 
@@ -936,15 +1041,45 @@ export async function fillCancellationRequest(ownerUserId, requestId, substitute
     await assertSubstitute(client, request, substituteTeacherId);
     request.filled_teacher_id = substituteTeacherId;
     const result = await performFill(client, request);
-    await performClear(client, request);
+    const cleared = await performClear(client, request);
     await client.query(
       `UPDATE cancellation_requests
           SET status = 'filled', filled_teacher_id = $2, resolved_at = now()
         WHERE id = $1`,
       [requestId, substituteTeacherId],
     );
-    return { request, moved: result };
+    return { request, moved: result, cleared };
   });
-  await notifyMoved(moved.request, substituteTeacherId, moved.moved);
+  const { request } = moved;
+  await notifyMoved(request, substituteTeacherId, moved.moved);
+
+  const filled = {
+    fromTeacherId: request.teacher_id,
+    toTeacherId: substituteTeacherId,
+    weekday: request.weekday,
+    startTime: request.start_time,
+  };
+  const movedToSubstitute = (moved.moved.movedLessons || []).map((l) => ({ ...l, series: false }));
+  if (!moved.moved.occupantInLessons) {
+    movedToSubstitute.unshift({
+      studentId: request.student_id,
+      childName: request.child_name,
+      series: moved.moved.series,
+      lessonDate: moved.moved.lessonDate,
+    });
+  }
+  for (const lesson of movedToSubstitute) {
+    await notifyStudentCoachFilled({ ...filled, ...lesson });
+  }
+  await notifyCoachLessonsAdded({
+    teacherId: substituteTeacherId,
+    fromTeacherId: request.teacher_id,
+    lessons: movedToSubstitute,
+    weekday: request.weekday,
+    startTime: request.start_time,
+  });
+  // Anyone the clear removed who was not moved to the substitute lost their lesson.
+  await notifyCleared(request, moved.cleared, request.student_id);
+  await notifyRequestResolved(request, 'filled', substituteTeacherId);
   return { ok: true };
 }

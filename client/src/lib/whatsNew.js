@@ -3,7 +3,7 @@
  * people see the next announcement. A session cookie records that this browser
  * session already showed the current id (clears when the browser is closed).
  */
-export const WHATS_NEW_ID = '2026-10-calendar-weekly-login';
+export const WHATS_NEW_ID = '2026-11-notification-bell';
 
 const COOKIE = 'whats_new_seen';
 

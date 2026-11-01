@@ -4,6 +4,7 @@ import { isScheduleTeacher } from '../middleware/scheduleTeacher.js';
 import { resolveBookerStudentId } from './booker.js';
 import { loadSlotForUpdate, assertSlotOpenOnDate } from './assertSlotOpen.js';
 import { isLessonPast } from './week.js';
+import { bookingRef, weekRef } from '../services/notifications.js';
 
 const UNDOABLE = new Set(['student', 'teacher']);
 
@@ -29,13 +30,15 @@ async function assertMayUndo(req, { slotTeacherId, studentId, cancelledBy }) {
   if (req.user.role === 'teacher' || req.user.role === 'studio_owner') {
     isCoach = await isScheduleTeacher(req, slotTeacherId);
   }
-  if (cancelledBy === 'student' && (isBooker || isCoach)) return;
-  if (cancelledBy === 'teacher' && isCoach) return;
+  const undoneBy = isBooker ? 'student' : req.user.role === 'studio_owner' ? 'studio' : 'teacher';
+  if (cancelledBy === 'student' && (isBooker || isCoach)) return undoneBy;
+  if (cancelledBy === 'teacher' && isCoach) return undoneBy;
   throw new HttpError(403, 'You cannot undo this cancellation.');
 }
 
+/** Restores a cancelled one-off lesson and returns what is needed to notify the other side. */
 export async function undoBookingCancellation(req, bookingId) {
-  await withTransaction(async (client) => {
+  return withTransaction(async (client) => {
     const { rows } = await client.query(
       `SELECT b.*, s.teacher_id, s.start_time
          FROM bookings b
@@ -52,7 +55,7 @@ export async function undoBookingCancellation(req, bookingId) {
     if (isLessonPast(lessonDate, booking.start_time)) {
       throw new HttpError(400, 'That lesson time has already passed.');
     }
-    await assertMayUndo(req, {
+    const undoneBy = await assertMayUndo(req, {
       slotTeacherId: booking.teacher_id,
       studentId: booking.student_id,
       cancelledBy: booking.cancelled_by,
@@ -80,13 +83,23 @@ export async function undoBookingCancellation(req, bookingId) {
         WHERE id = $1`,
       [booking.id],
     );
+    return {
+      undoneBy,
+      refs: [bookingRef(booking.id)],
+      studentId: booking.student_id,
+      childName: booking.child_name,
+      teacherId: booking.teacher_id,
+      lessonDate,
+      startTime: booking.start_time,
+    };
   });
 }
 
+/** Restores one cancelled week of a weekly spot and returns what is needed to notify the other side. */
 export async function undoWeeklyCancellation(req, assignmentId, date) {
-  await withTransaction(async (client) => {
+  return withTransaction(async (client) => {
     const { rows } = await client.query(
-      `SELECT ra.id, ra.student_id, ra.slot_id, s.teacher_id, s.start_time
+      `SELECT ra.id, ra.student_id, ra.slot_id, ra.child_name, s.teacher_id, s.start_time
          FROM recurring_assignments ra
          JOIN slots s ON s.id = ra.slot_id
         WHERE ra.id = $1 AND ra.status = 'approved'
@@ -107,7 +120,7 @@ export async function undoWeeklyCancellation(req, assignmentId, date) {
     );
     const exception = exceptions[0];
     if (!exception) throw new HttpError(404, 'That week is not cancelled.');
-    await assertMayUndo(req, {
+    const undoneBy = await assertMayUndo(req, {
       slotTeacherId: ra.teacher_id,
       studentId: ra.student_id,
       cancelledBy: exception.cancelled_by,
@@ -125,12 +138,22 @@ export async function undoWeeklyCancellation(req, assignmentId, date) {
       'DELETE FROM slot_exceptions WHERE slot_id = $1 AND exception_date = $2',
       [ra.slot_id, date],
     );
-    await client.query(
+    const { rows: restored } = await client.query(
       `UPDATE bookings
           SET status = 'booked', cancelled_at = NULL, cancelled_by = NULL
         WHERE slot_id = $1 AND lesson_date = $2 AND student_id = $3
-          AND status = 'cancelled' AND cancelled_by IN ('student', 'teacher')`,
+          AND status = 'cancelled' AND cancelled_by IN ('student', 'teacher')
+        RETURNING id`,
       [ra.slot_id, date, ra.student_id],
     );
+    return {
+      undoneBy,
+      refs: [weekRef(ra.id, date), ...restored.map((b) => bookingRef(b.id))],
+      studentId: ra.student_id,
+      childName: ra.child_name,
+      teacherId: ra.teacher_id,
+      lessonDate: date,
+      startTime: ra.start_time,
+    };
   });
 }

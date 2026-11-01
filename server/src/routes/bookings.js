@@ -13,6 +13,13 @@ import {
   getMonday,
 } from '../utils/week.js';
 import { sendBookingConfirmation } from '../services/email.js';
+import {
+  bookingRef,
+  notifyCancellationUndone,
+  notifyCoachLessonBooked,
+  notifyCoachStudentCancelled,
+  notifyStudentsLessonCancelled,
+} from '../services/notifications.js';
 import { normalizeChildrenNames } from './students.js';
 import { resolveBookerStudentId } from '../utils/booker.js';
 import { loadSlotForUpdate, assertSlotOpenOnDate } from '../utils/assertSlotOpen.js';
@@ -132,6 +139,13 @@ bookingsRouter.post(
       slot: booking.slot,
       lessonDate,
       childName: booking.childName,
+    });
+    await notifyCoachLessonBooked({
+      teacherId: booking.slot.teacher_id,
+      studentId: bookerStudentId,
+      childName: booking.childName,
+      lessonDate,
+      startTime: booking.slot.start_time,
     });
 
     res.status(201).json({
@@ -422,7 +436,7 @@ bookingsRouter.delete(
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     const { rows } = await query(
-      `SELECT b.*, s.teacher_id FROM bookings b JOIN slots s ON s.id = b.slot_id WHERE b.id = $1`,
+      `SELECT b.*, s.teacher_id, s.start_time FROM bookings b JOIN slots s ON s.id = b.slot_id WHERE b.id = $1`,
       [id],
     );
     const booking = rows[0];
@@ -460,6 +474,30 @@ bookingsRouter.delete(
         WHERE id = $1`,
       [id, actor],
     );
+    const lesson = {
+      lessonDate: fmtDate(booking.lesson_date),
+      startTime: booking.start_time,
+    };
+    if (actor === 'student') {
+      await notifyCoachStudentCancelled({
+        ...lesson,
+        teacherId: booking.teacher_id,
+        studentId: booking.student_id,
+        childName: booking.child_name,
+        scope: 'lesson',
+        ref: bookingRef(booking.id),
+      });
+    } else {
+      await notifyStudentsLessonCancelled({
+        ...lesson,
+        students: [
+          { studentId: booking.student_id, childName: booking.child_name, ref: bookingRef(booking.id) },
+        ],
+        teacherId: booking.teacher_id,
+        scope: 'lesson',
+        byStudio: actor === 'studio',
+      });
+    }
     res.json({ ok: true });
   }),
 );
@@ -470,7 +508,8 @@ bookingsRouter.post(
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'Invalid lesson.');
-    await undoBookingCancellation(req, id);
+    const restored = await undoBookingCancellation(req, id);
+    await notifyCancellationUndone(restored);
     res.json({ ok: true });
   }),
 );

@@ -15,6 +15,12 @@ import { resolveBookerStudentId } from '../utils/booker.js';
 import { normalizeChildrenNames } from './students.js';
 import { loadSlotForUpdate, assertSlotOpenOnDate, fmtDate, fmtTime } from '../utils/assertSlotOpen.js';
 import { sendBookingConfirmation } from '../services/email.js';
+import {
+  notifyCoachHeldDeclined,
+  notifyCoachLessonBooked,
+  notifyStudentLessonHeld,
+  notifyStudentsHeldCancelled,
+} from '../services/notifications.js';
 import { resolvePaymentPartnerId } from '../utils/partners.js';
 
 export const invitesRouter = Router();
@@ -197,6 +203,13 @@ invitesRouter.post(
       });
       return { row: rows[0], slot };
     });
+    await notifyStudentLessonHeld({
+      studentId: student.id,
+      teacherId: req.scheduleTeacherId,
+      childName,
+      lessonDate,
+      startTime: invite.slot.start_time,
+    });
 
     res.status(201).json({
       invite: {
@@ -368,6 +381,13 @@ invitesRouter.post(
       lessonDate: result.lessonDate,
       childName: result.childName,
     });
+    await notifyCoachLessonBooked({
+      teacherId: result.slot.teacher_id,
+      studentId: bookerStudentId,
+      childName: result.childName,
+      lessonDate: result.lessonDate,
+      startTime: result.slot.start_time,
+    });
 
     res.json({
       booking: {
@@ -398,12 +418,19 @@ invitesRouter.post(
           AND li.slot_id = s.id
           AND li.student_id = $2
           AND li.status = 'pending'
-        RETURNING li.id`,
+        RETURNING li.id, li.student_id, li.child_name, li.lesson_date, s.teacher_id, s.start_time`,
       [id, bookerStudentId],
     );
     if (!rows[0]) {
       throw new HttpError(404, 'That scheduled lesson is no longer waiting for you.');
     }
+    await notifyCoachHeldDeclined({
+      teacherId: rows[0].teacher_id,
+      studentId: rows[0].student_id,
+      childName: rows[0].child_name,
+      lessonDate: fmtDate(rows[0].lesson_date),
+      startTime: rows[0].start_time,
+    });
     res.json({ ok: true });
   }),
 );
@@ -417,7 +444,7 @@ invitesRouter.delete(
     if (!Number.isInteger(id) || id < 1) throw new HttpError(400, 'Invalid invite.');
 
     const { rows: pending } = await query(
-      `SELECT li.id, li.slot_id, li.lesson_date
+      `SELECT li.id, li.slot_id, li.lesson_date, li.student_id, li.child_name, s.start_time
          FROM lesson_invites li
          JOIN slots s ON s.id = li.slot_id
         WHERE li.id = $1 AND s.teacher_id = $2 AND li.status = 'pending'`,
@@ -438,12 +465,21 @@ invitesRouter.delete(
       return;
     }
 
-    await query(
+    const { rowCount } = await query(
       `UPDATE lesson_invites
           SET status = 'cancelled', decided_at = now()
         WHERE id = $1 AND status = 'pending'`,
       [id],
     );
+    if (rowCount) {
+      const held = pending[0];
+      await notifyStudentsHeldCancelled({
+        students: [{ studentId: held.student_id, childName: held.child_name, lessonDate: held.lesson_date }],
+        teacherId: req.scheduleTeacherId,
+        startTime: held.start_time,
+        byStudio: req.user.role === 'studio_owner',
+      });
+    }
     res.json({ ok: true });
   }),
 );

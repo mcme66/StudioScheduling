@@ -22,33 +22,36 @@ export default function WhatsNewNotice() {
   if (!open) return null;
 
   return (
-    <Modal title="What’s new" subtitle="A few updates since you last visited." onClose={dismiss}>
+    <Modal title="What’s new" subtitle="Lesson updates now come to you." onClose={dismiss}>
       <div className="whats-new-body">
         <ul className="whats-new-list">
           <li>
-            <strong>A calendar of your week.</strong>{' '}
-            <Link to="/my-lessons" onClick={dismiss}>
-              My lessons
-            </Link>{' '}
-            now shows your lessons on a calendar, with a color for each child.
+            <strong>A new notification bell.</strong> Look for the bell at the top right, next to
+            Log out. A red number shows how many updates you haven’t read yet.
           </li>
           <li>
-            <strong>Pick your colors.</strong> Choose lesson colors on your{' '}
-            <Link to="/profile" onClick={dismiss}>
-              Profile
+            <strong>Weekly spot answers.</strong> Find out when your instructor accepts or declines
+            a weekly spot, or books a single lesson instead.
+          </li>
+          <li>
+            <strong>Cancellations and changes.</strong> Hear right away if your instructor or studio
+            cancels a lesson, or if a different instructor will teach it.
+          </li>
+          <li>
+            <strong>Lessons held for you.</strong> When an instructor holds a time for you, the bell
+            lets you know so you can accept or decline it on{' '}
+            <Link to="/my-lessons" onClick={dismiss}>
+              My lessons
             </Link>
             .
           </li>
           <li>
-            <strong>Weekly spots need a yes.</strong> When you ask for a weekly time, it stays
-            pending until your instructor says yes.
+            <strong>Back on the schedule.</strong> If a cancellation is undone, the old notice
+            disappears and you’ll see that your lesson is back on.
           </li>
           <li>
-            <strong>Search by time range.</strong> Find lessons that fit between a start and end
-            time.
-          </li>
-          <li>
-            <strong>One place to log in</strong> for everyone, plus a fresh new logo.
+            <strong>Tidy by itself.</strong> Tap a notification to open it, or use{' '}
+            <em>Mark all read</em>. Read notifications clear after 15 days, unread ones after 45.
           </li>
         </ul>
       </div>

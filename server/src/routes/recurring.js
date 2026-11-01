@@ -11,6 +11,16 @@ import {
   sendWeeklySpotDeclined,
   sendWeeklySpotOneTime,
 } from '../services/email.js';
+import {
+  notifyCancellationUndone,
+  notifyCoachStudentCancelled,
+  notifyCoachWeeklyRequested,
+  notifyStudentsLessonCancelled,
+  notifyStudentsWeeklyDeclined,
+  notifyStudentWeeklyApproved,
+  notifyStudentWeeklyOneTime,
+  weekRef,
+} from '../services/notifications.js';
 import { cancelActor, undoWeeklyCancellation } from '../utils/lessonCancel.js';
 import {
   weekdayOf,
@@ -229,6 +239,14 @@ recurringRouter.post(
       lessonDate,
       childName: created.childName,
     });
+    await notifyCoachWeeklyRequested({
+      teacherId: created.slot.teacher_id,
+      studentId: bookerStudentId,
+      childName: created.childName,
+      weekday: created.slot.weekday,
+      startTime: created.slot.start_time,
+      startsOn: lessonDate,
+    });
 
     res.status(201).json({
       request: {
@@ -342,13 +360,14 @@ recurringRouter.post(
         throw err;
       });
 
-      await client.query(
+      const { rows: passedOver } = await client.query(
         `UPDATE recurring_assignments SET status = 'declined', decided_at = now()
-          WHERE slot_id = $1 AND status = 'pending' AND id <> $2`,
+          WHERE slot_id = $1 AND status = 'pending' AND id <> $2
+          RETURNING student_id, child_name`,
         [reqRow.slot_id, id],
       );
 
-      return { ...reqRow, starts_on: startsOn };
+      return { ...reqRow, starts_on: startsOn, passedOver };
     });
 
     const { student, teacher } = await peopleForRequest(result.student_id, req.scheduleTeacherId);
@@ -358,6 +377,21 @@ recurringRouter.post(
       slot: result,
       childName: result.child_name || null,
       startsOn: fmtDate(result.starts_on),
+    });
+    await notifyStudentWeeklyApproved({
+      studentId: result.student_id,
+      teacherId: req.scheduleTeacherId,
+      childName: result.child_name || null,
+      weekday: result.weekday,
+      startTime: result.start_time,
+      startsOn: fmtDate(result.starts_on),
+    });
+    await notifyStudentsWeeklyDeclined({
+      students: result.passedOver.map((r) => ({ studentId: r.student_id, childName: r.child_name })),
+      teacherId: req.scheduleTeacherId,
+      weekday: result.weekday,
+      startTime: result.start_time,
+      reason: 'taken',
     });
 
     res.json({ ok: true, startsOn: fmtDate(result.starts_on) });
@@ -429,6 +463,13 @@ recurringRouter.post(
       lessonDate: result.lessonDate,
       childName: result.child_name || null,
     });
+    await notifyStudentWeeklyOneTime({
+      studentId: result.student_id,
+      teacherId: req.scheduleTeacherId,
+      childName: result.child_name || null,
+      lessonDate: result.lessonDate,
+      startTime: result.start_time,
+    });
 
     res.json({ ok: true, lessonDate: result.lessonDate });
   }),
@@ -464,6 +505,14 @@ recurringRouter.post(
       slot: result,
       lessonDate: result.starts_on ? fmtDate(result.starts_on) : null,
       childName: result.child_name || null,
+    });
+    await notifyStudentsWeeklyDeclined({
+      students: [{ studentId: result.student_id, childName: result.child_name }],
+      teacherId: req.scheduleTeacherId,
+      weekday: result.weekday,
+      startTime: result.start_time,
+      reason: 'declined',
+      byStudio: req.user.role === 'studio_owner',
     });
 
     res.json({ ok: true });
@@ -553,8 +602,8 @@ recurringRouter.post(
     const { date } = skipSchema.parse(req.body);
 
     const { rows } = await query(
-      `SELECT ra.id, ra.status, ra.student_id, ra.slot_id, ra.starts_on, s.teacher_id, s.weekday,
-              s.series_start_date, s.series_end_date
+      `SELECT ra.id, ra.status, ra.student_id, ra.slot_id, ra.starts_on, ra.child_name, s.teacher_id,
+              s.weekday, s.start_time, s.series_start_date, s.series_end_date
          FROM recurring_assignments ra
          JOIN slots s ON s.id = ra.slot_id WHERE ra.id = $1`,
       [id],
@@ -604,6 +653,10 @@ recurringRouter.post(
     }
 
     const actor = cancelActor(req, ra.teacher_id);
+    const { rows: priorException } = await query(
+      'SELECT 1 FROM slot_exceptions WHERE slot_id = $1 AND exception_date = $2',
+      [ra.slot_id, date],
+    );
     await query(
       `INSERT INTO slot_exceptions (slot_id, exception_date, kind, cancelled_by)
        VALUES ($1, $2, 'skipped', $3)
@@ -611,6 +664,25 @@ recurringRouter.post(
        DO UPDATE SET kind = 'skipped', cancelled_by = EXCLUDED.cancelled_by`,
       [ra.slot_id, date, actor],
     );
+    const lesson = { scope: 'week', lessonDate: date, startTime: ra.start_time };
+    const ref = weekRef(ra.id, date);
+    const alreadyCancelled = !!priorException[0];
+    if (!alreadyCancelled && actor === 'student') {
+      await notifyCoachStudentCancelled({
+        ...lesson,
+        teacherId: ra.teacher_id,
+        studentId: ra.student_id,
+        childName: ra.child_name,
+        ref,
+      });
+    } else if (!alreadyCancelled) {
+      await notifyStudentsLessonCancelled({
+        ...lesson,
+        students: [{ studentId: ra.student_id, childName: ra.child_name, ref }],
+        teacherId: ra.teacher_id,
+        byStudio: actor === 'studio',
+      });
+    }
     res.json({ ok: true });
   }),
 );
@@ -622,7 +694,8 @@ recurringRouter.post(
     const id = Number(req.params.id);
     const { date } = skipSchema.parse(req.body);
     if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'Invalid weekly spot.');
-    await undoWeeklyCancellation(req, id, date);
+    const restored = await undoWeeklyCancellation(req, id, date);
+    await notifyCancellationUndone(restored);
     res.json({ ok: true });
   }),
 );
@@ -635,9 +708,11 @@ recurringRouter.delete(
   asyncHandler(async (req, res) => {
     const id = Number(req.params.id);
     let requested = null;
+    let ended = null;
     await withTransaction(async (client) => {
       const { rows } = await client.query(
-        `SELECT ra.id, ra.status, ra.student_id, ra.starts_on, ra.slot_id, s.teacher_id
+        `SELECT ra.id, ra.status, ra.student_id, ra.starts_on, ra.slot_id, ra.child_name,
+                s.teacher_id, s.weekday, s.start_time
            FROM recurring_assignments ra
            JOIN slots s ON s.id = ra.slot_id
           WHERE ra.id = $1
@@ -683,7 +758,36 @@ recurringRouter.delete(
         "UPDATE recurring_assignments SET status = 'cancelled', decided_at = now() WHERE id = $1",
         [id],
       );
+      ended = { ...ra, actor: cancelActor(req, ra.teacher_id) };
     });
+    if (ended) {
+      const spot = { weekday: ended.weekday, startTime: ended.start_time };
+      if (ended.actor === 'student') {
+        await notifyCoachStudentCancelled({
+          ...spot,
+          teacherId: ended.teacher_id,
+          studentId: ended.student_id,
+          childName: ended.child_name,
+          scope: ended.status === 'approved' ? 'weekly' : 'request',
+        });
+      } else if (ended.status === 'approved') {
+        await notifyStudentsLessonCancelled({
+          ...spot,
+          students: [{ studentId: ended.student_id, childName: ended.child_name }],
+          teacherId: ended.teacher_id,
+          scope: 'weekly',
+          byStudio: ended.actor === 'studio',
+        });
+      } else {
+        await notifyStudentsWeeklyDeclined({
+          ...spot,
+          students: [{ studentId: ended.student_id, childName: ended.child_name }],
+          teacherId: ended.teacher_id,
+          reason: 'declined',
+          byStudio: ended.actor === 'studio',
+        });
+      }
+    }
     res.json(requested || { ok: true });
   }),
 );

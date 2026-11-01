@@ -1,6 +1,7 @@
 import { NavLink, Link, useNavigate, Outlet } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext.jsx';
 import WhatsNewNotice from './WhatsNewNotice.jsx';
+import NotificationBell from './NotificationBell.jsx';
 
 export default function Layout() {
   const { user, logout } = useAuth();
@@ -59,9 +60,12 @@ export default function Layout() {
 
         <div className="header-side header-right">
           {user ? (
-            <button type="button" className="btn btn-ghost btn-sm" onClick={handleLogout}>
-              Log out
-            </button>
+            <>
+              <NotificationBell />
+              <button type="button" className="btn btn-ghost btn-sm" onClick={handleLogout}>
+                Log out
+              </button>
+            </>
           ) : (
             <NavLink to="/login" className="header-auth-btn">
               Log in

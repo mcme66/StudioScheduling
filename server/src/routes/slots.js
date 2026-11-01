@@ -10,6 +10,14 @@ import {
 } from '../services/coachManagement.js';
 import { cancelActor } from '../utils/lessonCancel.js';
 import {
+  bookingRef,
+  notifyCancellationUndone,
+  notifyStudentsHeldCancelled,
+  notifyStudentsLessonCancelled,
+  notifyStudentsWeeklyDeclined,
+  weekRef,
+} from '../services/notifications.js';
+import {
   weekdayOf,
   isValidDateStr,
   todayISO,
@@ -369,7 +377,7 @@ slotsRouter.post(
     const { date } = dateSchema.parse(req.body);
 
     const { rows } = await query(
-      'SELECT id, weekday, one_off_date, series_start_date, series_end_date FROM slots WHERE id = $1 AND teacher_id = $2',
+      'SELECT id, weekday, start_time, one_off_date, series_start_date, series_end_date FROM slots WHERE id = $1 AND teacher_id = $2',
       [id, req.scheduleTeacherId],
     );
     const slot = rows[0];
@@ -402,7 +410,18 @@ slotsRouter.post(
     }
 
     const actor = cancelActor(req, req.scheduleTeacherId);
-    await withTransaction(async (client) => {
+    const affected = await withTransaction(async (client) => {
+      const { rows: weekly } = await client.query(
+        `SELECT ra.id, ra.student_id, ra.child_name
+           FROM recurring_assignments ra
+          WHERE ra.slot_id = $1 AND ra.status = 'approved'
+            AND (ra.starts_on IS NULL OR ra.starts_on <= $2::date)
+            AND NOT EXISTS (
+              SELECT 1 FROM slot_exceptions se
+               WHERE se.slot_id = ra.slot_id AND se.exception_date = $2::date
+            )`,
+        [id, date],
+      );
       await client.query(
         `INSERT INTO slot_exceptions (slot_id, exception_date, kind, cancelled_by)
          VALUES ($1, $2, 'blocked', $3)
@@ -410,12 +429,25 @@ slotsRouter.post(
          DO UPDATE SET kind = 'blocked', cancelled_by = EXCLUDED.cancelled_by`,
         [id, date, actor],
       );
-      await client.query(
+      const { rows: booked } = await client.query(
         `UPDATE bookings
             SET status = 'cancelled', cancelled_at = now(), cancelled_by = $3
-          WHERE slot_id = $1 AND lesson_date = $2 AND status = 'booked'`,
+          WHERE slot_id = $1 AND lesson_date = $2 AND status = 'booked'
+          RETURNING id, student_id, child_name`,
         [id, date, actor],
       );
+      return [
+        ...weekly.map((r) => ({ ...r, ref: weekRef(r.id, date) })),
+        ...booked.map((r) => ({ ...r, ref: bookingRef(r.id) })),
+      ];
+    });
+    await notifyStudentsLessonCancelled({
+      students: affected.map((r) => ({ studentId: r.student_id, childName: r.child_name, ref: r.ref })),
+      teacherId: req.scheduleTeacherId,
+      scope: 'week',
+      lessonDate: date,
+      startTime: slot.start_time,
+      byStudio: actor === 'studio',
     });
     res.json({ ok: true });
   }),
@@ -464,20 +496,23 @@ slotsRouter.post(
       return;
     }
 
-    await withTransaction(async (client) => {
+    const affected = await withTransaction(async (client) => {
       // Cancel future one-off bookings from fromDate forward.
-      await client.query(
+      const { rows: booked } = await client.query(
         `UPDATE bookings
             SET status = 'cancelled', cancelled_at = now(), cancelled_by = 'closed'
-          WHERE slot_id = $1 AND lesson_date >= $2 AND status = 'booked'`,
+          WHERE slot_id = $1 AND lesson_date >= $2 AND status = 'booked'
+          RETURNING student_id, child_name, lesson_date`,
         [id, fromDate],
       );
 
       // Weekly spots cannot continue past the series end.
-      await client.query(
-        `UPDATE recurring_assignments
+      const { rows: weekly } = await client.query(
+        `UPDATE recurring_assignments ra
             SET status = 'cancelled', decided_at = now()
-          WHERE slot_id = $1 AND status IN ('pending', 'approved')`,
+           FROM recurring_assignments prev
+          WHERE ra.id = prev.id AND ra.slot_id = $1 AND ra.status IN ('pending', 'approved')
+          RETURNING ra.student_id, ra.child_name, prev.status AS previous_status`,
         [id],
       );
 
@@ -489,6 +524,37 @@ slotsRouter.post(
           [previousOccurrence, id],
         );
       }
+      return {
+        booked,
+        weekly: weekly.filter((r) => r.previous_status === 'approved'),
+        requests: weekly.filter((r) => r.previous_status === 'pending'),
+      };
+    });
+
+    const notice = {
+      teacherId: req.scheduleTeacherId,
+      weekday: slot.weekday,
+      startTime: slot.start_time,
+      byStudio: req.user.role === 'studio_owner',
+    };
+    await notifyStudentsLessonCancelled({
+      ...notice,
+      scope: 'weekly',
+      students: affected.weekly.map((r) => ({ studentId: r.student_id, childName: r.child_name })),
+    });
+    await notifyStudentsLessonCancelled({
+      ...notice,
+      scope: 'lesson',
+      students: affected.booked.map((r) => ({
+        studentId: r.student_id,
+        childName: r.child_name,
+        lessonDate: r.lesson_date,
+      })),
+    });
+    await notifyStudentsWeeklyDeclined({
+      ...notice,
+      reason: 'closed',
+      students: affected.requests.map((r) => ({ studentId: r.student_id, childName: r.child_name })),
     });
 
     res.json({ ok: true, deleted: !hasPastInSeries });
@@ -503,16 +569,35 @@ slotsRouter.delete(
     const { date } = dateSchema.parse(req.body);
 
     const { rows } = await query(
-      'SELECT id FROM slots WHERE id = $1 AND teacher_id = $2',
+      'SELECT id, start_time FROM slots WHERE id = $1 AND teacher_id = $2',
       [id, req.scheduleTeacherId],
     );
     if (!rows[0]) throw new HttpError(404, 'Slot not found.');
     await assertCoachMayEdit(req);
 
-    await query(
-      'DELETE FROM slot_exceptions WHERE slot_id = $1 AND exception_date = $2',
+    const { rows: removed } = await query(
+      'DELETE FROM slot_exceptions WHERE slot_id = $1 AND exception_date = $2 RETURNING id',
       [id, date],
     );
+    if (removed[0]) {
+      const { rows: weekly } = await query(
+        `SELECT id, student_id, child_name FROM recurring_assignments
+          WHERE slot_id = $1 AND status = 'approved'
+            AND (starts_on IS NULL OR starts_on <= $2::date)`,
+        [id, date],
+      );
+      for (const ra of weekly) {
+        await notifyCancellationUndone({
+          refs: [weekRef(ra.id, date)],
+          undoneBy: req.user.role === 'studio_owner' ? 'studio' : 'teacher',
+          studentId: ra.student_id,
+          childName: ra.child_name,
+          teacherId: req.scheduleTeacherId,
+          lessonDate: date,
+          startTime: rows[0].start_time,
+        });
+      }
+    }
     res.json({ ok: true });
   }),
 );
@@ -537,7 +622,59 @@ slotsRouter.delete(
       return;
     }
 
+    const [{ rows: booked }, { rows: assignments }, { rows: held }] = await Promise.all([
+      query(
+        `SELECT b.student_id, b.child_name, b.lesson_date
+           FROM bookings b
+          WHERE b.slot_id = $1 AND b.status = 'booked'
+            AND (b.lesson_date + $2::time) > now()`,
+        [id, rows[0].start_time],
+      ),
+      query(
+        `SELECT student_id, child_name, status FROM recurring_assignments
+          WHERE slot_id = $1 AND status IN ('approved', 'pending')`,
+        [id],
+      ),
+      query(
+        `SELECT student_id, child_name, lesson_date FROM lesson_invites
+          WHERE slot_id = $1 AND status = 'pending'`,
+        [id],
+      ),
+    ]);
+    const weekly = assignments.filter((r) => r.status === 'approved');
+    const requests = assignments.filter((r) => r.status === 'pending');
     await query('DELETE FROM slots WHERE id = $1 AND teacher_id = $2', [id, req.scheduleTeacherId]);
+
+    const slot = rows[0];
+    const notice = {
+      teacherId: req.scheduleTeacherId,
+      weekday: slot.weekday,
+      startTime: slot.start_time,
+      byStudio: req.user.role === 'studio_owner',
+    };
+    await notifyStudentsLessonCancelled({
+      ...notice,
+      scope: 'weekly',
+      students: weekly.map((r) => ({ studentId: r.student_id, childName: r.child_name })),
+    });
+    await notifyStudentsLessonCancelled({
+      ...notice,
+      scope: 'lesson',
+      students: booked.map((r) => ({
+        studentId: r.student_id,
+        childName: r.child_name,
+        lessonDate: r.lesson_date,
+      })),
+    });
+    await notifyStudentsWeeklyDeclined({
+      ...notice,
+      reason: 'closed',
+      students: requests.map((r) => ({ studentId: r.student_id, childName: r.child_name })),
+    });
+    await notifyStudentsHeldCancelled({
+      ...notice,
+      students: held.map((r) => ({ studentId: r.student_id, childName: r.child_name, lessonDate: r.lesson_date })),
+    });
     res.json({ ok: true });
   }),
 );

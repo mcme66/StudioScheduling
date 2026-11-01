@@ -14,8 +14,10 @@ import { studiosRouter } from './routes/studios.js';
 import { studentsRouter } from './routes/students.js';
 import { invitesRouter } from './routes/invites.js';
 import { ownerRouter } from './routes/owner.js';
+import { notificationsRouter } from './routes/notifications.js';
 import { startReminderJob } from './services/reminders.js';
 import { startTeacherDailyScheduleJob } from './services/teacherDailySchedule.js';
+import { startNotificationCleanupJob } from './services/notifications.js';
 
 const app = express();
 
@@ -47,6 +49,7 @@ app.use('/api/recurring', recurringRouter);
 app.use('/api/students', studentsRouter);
 app.use('/api/invites', invitesRouter);
 app.use('/api/owner', ownerRouter);
+app.use('/api/notifications', notificationsRouter);
 
 app.use(notFound);
 app.use(errorHandler);
@@ -55,4 +58,5 @@ app.listen(env.port, '0.0.0.0', () => {
   console.log(`Lesson Scheduling API listening on port ${env.port} (${env.nodeEnv})`);
   startReminderJob();
   startTeacherDailyScheduleJob();
+  startNotificationCleanupJob();
 });
