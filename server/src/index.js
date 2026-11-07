@@ -15,6 +15,7 @@ import { studentsRouter } from './routes/students.js';
 import { invitesRouter } from './routes/invites.js';
 import { ownerRouter } from './routes/owner.js';
 import { notificationsRouter } from './routes/notifications.js';
+import { paymentsRouter } from './routes/payments.js';
 import { startReminderJob } from './services/reminders.js';
 import { startTeacherDailyScheduleJob } from './services/teacherDailySchedule.js';
 import { startNotificationCleanupJob } from './services/notifications.js';
@@ -50,6 +51,7 @@ app.use('/api/students', studentsRouter);
 app.use('/api/invites', invitesRouter);
 app.use('/api/owner', ownerRouter);
 app.use('/api/notifications', notificationsRouter);
+app.use('/api/payments', paymentsRouter);
 
 app.use(notFound);
 app.use(errorHandler);

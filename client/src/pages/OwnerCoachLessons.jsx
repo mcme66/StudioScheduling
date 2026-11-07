@@ -85,7 +85,8 @@ export default function OwnerCoachLessons() {
       </div>
       {data && (
         <p className="page-sub">
-          {count} lesson{count === 1 ? '' : 's'} · {fmtPrice(data.floorFeeCents)} expected floor fees
+          {count} completed lesson{count === 1 ? '' : 's'} · {fmtPrice(data.floorFeeCents)} floor fees
+          {data.awaitingCount > 0 ? ` · ${data.awaitingCount} awaiting completion` : ''}
         </p>
       )}
 
@@ -104,7 +105,7 @@ export default function OwnerCoachLessons() {
         </p>
       )}
 
-      {data && count === 0 && <div className="card center muted">No lessons in this period.</div>}
+      {data && count === 0 && <div className="card center muted">No completed lessons in this period.</div>}
 
       {days.map((day) => (
         <div className="card" key={day.date}>

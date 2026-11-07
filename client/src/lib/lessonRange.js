@@ -33,3 +33,11 @@ export function thisMonthAnchor() {
 export function lastMonthAnchor() {
   return addMonths(thisMonthAnchor(), -1);
 }
+
+export function thisWeekAnchor() {
+  return getMonday(todayISO());
+}
+
+export function lastWeekAnchor() {
+  return addWeeks(thisWeekAnchor(), -1);
+}

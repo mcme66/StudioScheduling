@@ -122,9 +122,13 @@ export default function Profile() {
             fullName: form.fullName,
             phone: form.phone || '',
             ...(teacherManaged ? {} : { bio: form.bio || '' }),
-            defaultPriceCents: Math.round(Number(form.defaultPrice || 0) * 100),
-            defaultDurationMin: Number(form.defaultDurationMin || 45),
-            trackPayments: form.trackPayments,
+            ...(teacherManaged
+              ? {}
+              : {
+                  defaultPriceCents: Math.round(Number(form.defaultPrice || 0) * 100),
+                  defaultDurationMin: Number(form.defaultDurationMin || 45),
+                  trackPayments: form.trackPayments,
+                }),
             receiveEmails: form.receiveEmails,
             isActive: form.isActive,
             canBookAsStudent: form.canBookAsStudent,
@@ -178,6 +182,8 @@ export default function Profile() {
       await refresh();
       queryClient.invalidateQueries({ queryKey: ['my-partners'] });
       if (isTeacher) {
+        queryClient.invalidateQueries({ queryKey: ['teacher-bookings'] });
+        queryClient.invalidateQueries({ queryKey: ['coach-payments'] });
         await teacherQuery.refetch();
         await myStudiosQuery.refetch();
       } else if (isStudent) {
@@ -457,38 +463,42 @@ export default function Profile() {
                   <textarea rows={3} value={form.bio} onChange={update('bio')} />
                 )}
               </div>
-              <div className="row" style={{ gap: '0.75rem' }}>
-                <div className="field" style={{ flex: 1 }}>
-                  <label>Default price ($)</label>
-                  <input type="number" min="0" value={form.defaultPrice} onChange={update('defaultPrice')} />
-                </div>
-                <div className="field" style={{ flex: 1 }}>
-                  <label>Lesson length (min)</label>
-                  <input
-                    type="number"
-                    min="5"
-                    value={form.defaultDurationMin}
-                    onChange={update('defaultDurationMin')}
-                  />
-                </div>
-              </div>
-              <div className={`recurring-toggle${form.trackPayments ? ' active' : ''}`}>
-                <div
-                  className="recurring-toggle-row"
-                  onClick={() => setForm((f) => ({ ...f, trackPayments: !f.trackPayments }))}
-                >
-                  <div className="recurring-toggle-label">
-                    <strong>Track payments</strong>
-                    <span>Let you and your students mark lessons as paid</span>
+              {!teacherManaged && (
+                <div className="row" style={{ gap: '0.75rem' }}>
+                  <div className="field" style={{ flex: 1 }}>
+                    <label>Default price ($)</label>
+                    <input type="number" min="0" value={form.defaultPrice} onChange={update('defaultPrice')} />
                   </div>
-                  <button
-                    type="button"
-                    className={`switch${form.trackPayments ? ' on' : ''}`}
-                    aria-pressed={form.trackPayments}
-                    aria-label="Toggle payment tracking"
-                  />
+                  <div className="field" style={{ flex: 1 }}>
+                    <label>Lesson length (min)</label>
+                    <input
+                      type="number"
+                      min="5"
+                      value={form.defaultDurationMin}
+                      onChange={update('defaultDurationMin')}
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
+              {!teacherManaged && (
+                <div className={`recurring-toggle${form.trackPayments ? ' active' : ''}`}>
+                  <div
+                    className="recurring-toggle-row"
+                    onClick={() => setForm((f) => ({ ...f, trackPayments: !f.trackPayments }))}
+                  >
+                    <div className="recurring-toggle-label">
+                      <strong>Track payments</strong>
+                      <span>Mark lessons complete, track what students owe, and record payments.</span>
+                    </div>
+                    <button
+                      type="button"
+                      className={`switch${form.trackPayments ? ' on' : ''}`}
+                      aria-pressed={form.trackPayments}
+                      aria-label="Toggle payment tracking"
+                    />
+                  </div>
+                </div>
+              )}
             </>
           )}
 

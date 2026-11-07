@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/client.js';
 import { useToast } from '../Toast.jsx';
@@ -7,13 +8,68 @@ import { fmtDate, fmtPrice } from '../../lib/format.js';
 import {
   initialAnchor,
   lastMonthAnchor,
+  lastWeekAnchor,
   rangeBounds,
   shiftAnchor,
   thisMonthAnchor,
+  thisWeekAnchor,
 } from '../../lib/lessonRange.js';
 
 function dollars(cents) {
   return String(((cents ?? 0) / 100).toFixed(2)).replace(/\.00$/, '');
+}
+
+function BalancesCard() {
+  const balancesQuery = useQuery({
+    queryKey: ['owner-balances'],
+    queryFn: () => api('/owner/balances'),
+  });
+
+  const data = balancesQuery.data;
+  return (
+    <div className="card">
+      <div className="section-title">Balances</div>
+      <p className="muted" style={{ fontSize: '13px', marginBottom: '0.9rem' }}>
+        Floor fees from lessons coaches have been paid for, and payouts owed for lessons the studio
+        collected. Settle each lesson on the <Link to="/owner/requests">Requests</Link> page.
+      </p>
+      {balancesQuery.isLoading && <div className="loading">Loading…</div>}
+      {balancesQuery.isError && <p className="error-text">{balancesQuery.error.message}</p>}
+      {data && data.coaches.length === 0 && (
+        <p className="muted" style={{ fontSize: '14px' }}>All settled up.</p>
+      )}
+      {data && data.coaches.length > 0 && (
+        <table className="fee-table">
+          <thead>
+            <tr>
+              <th>Coach</th>
+              <th className="num">Floor fees owed</th>
+              <th className="num">Payout owed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.coaches.map((c) => (
+              <tr key={c.id}>
+                <td>
+                  {c.fullName}
+                  {c.ownerManaged && <span className="contact"> Managed</span>}
+                </td>
+                <td className="num">{c.floorFeesOwedCents > 0 ? fmtPrice(c.floorFeesOwedCents) : '—'}</td>
+                <td className="num">{c.payoutOwedCents > 0 ? fmtPrice(c.payoutOwedCents) : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td>Studio total</td>
+              <td className="num">{fmtPrice(data.floorFeesOwedCents)}</td>
+              <td className="num">{fmtPrice(data.payoutOwedCents)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      )}
+    </div>
+  );
 }
 
 export default function FeesTab({ studio, teachers }) {
@@ -29,8 +85,9 @@ export default function FeesTab({ studio, teachers }) {
   const [rangeMode, setRangeMode] = useState('month');
   const [rangeAnchor, setRangeAnchor] = useState(() => initialAnchor('month'));
   const coachRange = useMemo(() => rangeBounds(rangeMode, rangeAnchor), [rangeMode, rangeAnchor]);
-  const thisMonth = thisMonthAnchor();
-  const lastMonth = lastMonthAnchor();
+  const isWeek = rangeMode === 'week';
+  const currentAnchor = isWeek ? thisWeekAnchor() : thisMonthAnchor();
+  const previousAnchor = isWeek ? lastWeekAnchor() : lastMonthAnchor();
 
   useEffect(() => {
     setForm({
@@ -72,22 +129,16 @@ export default function FeesTab({ studio, teachers }) {
 
   const rangePresets = [
     {
-      id: 'this-month',
-      label: 'This month',
-      active: rangeMode === 'month' && rangeAnchor === thisMonth,
-      onClick: () => {
-        setRangeMode('month');
-        setRangeAnchor(thisMonth);
-      },
+      id: 'current',
+      label: isWeek ? 'This week' : 'This month',
+      active: rangeAnchor === currentAnchor,
+      onClick: () => setRangeAnchor(currentAnchor),
     },
     {
-      id: 'last-month',
-      label: 'Last month',
-      active: rangeMode === 'month' && rangeAnchor === lastMonth,
-      onClick: () => {
-        setRangeMode('month');
-        setRangeAnchor(lastMonth);
-      },
+      id: 'previous',
+      label: isWeek ? 'Last week' : 'Last month',
+      active: rangeAnchor === previousAnchor,
+      onClick: () => setRangeAnchor(previousAnchor),
     },
   ];
 
@@ -164,8 +215,10 @@ export default function FeesTab({ studio, teachers }) {
       </form>
 
       <div className="card">
-        <div className="section-title">Expected floor fees</div>
+        <div className="section-title">Floor fees</div>
         <p className="muted" style={{ fontSize: '13px', marginBottom: '0.9rem' }}>
+          Lessons coaches marked complete, using the fee from when they were marked, plus past
+          lessons for coaches who don&apos;t track payments. No-charge lessons aren&apos;t counted.
           Guest lessons use the higher of {Number(studio.floorFeePercent)}% or {fmtPrice(studio.floorFeeFlatCents)}.
           Studio students use the higher of {Number(studio.studioStudentFloorFeePercent ?? 0)}% or{' '}
           {fmtPrice(studio.studioStudentFloorFeeCents ?? 0)}.
@@ -190,7 +243,7 @@ export default function FeesTab({ studio, teachers }) {
                 <tr>
                   <th>Coach</th>
                   <th className="num">Lessons</th>
-                  <th className="num">Expected fee</th>
+                  <th className="num">Floor fee</th>
                 </tr>
               </thead>
               <tbody>
@@ -199,6 +252,7 @@ export default function FeesTab({ studio, teachers }) {
                     <td>
                       {c.fullName}
                       {!c.isActive && <span className="contact"> Inactive</span>}
+                      {c.floorFeeExempt && <span className="contact"> Exempt</span>}
                     </td>
                     <td className="num">{c.lessonCount}</td>
                     <td className="num">{fmtPrice(c.floorFeeCents)}</td>
@@ -215,6 +269,12 @@ export default function FeesTab({ studio, teachers }) {
                 </tr>
               </tfoot>
             </table>
+            {floorFeesQuery.data.awaitingCount > 0 && (
+              <p className="muted" style={{ fontSize: '13px', marginTop: '0.6rem' }}>
+                {floorFeesQuery.data.awaitingCount} more lesson
+                {floorFeesQuery.data.awaitingCount === 1 ? '' : 's'} awaiting completion by the coach.
+              </p>
+            )}
             {floorFeesQuery.data.weeks.length > 1 && (
               <div className="fee-weeks">
                 <div className="section-title" style={{ marginTop: '1.1rem' }}>Weeks in this range</div>
@@ -247,6 +307,8 @@ export default function FeesTab({ studio, teachers }) {
           </>
         )}
       </div>
+
+      <BalancesCard />
     </div>
   );
 }

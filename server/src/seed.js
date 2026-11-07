@@ -2,6 +2,8 @@ import bcrypt from 'bcryptjs';
 import { pool, query } from './db.js';
 import { todayISO, getMonday, dateForWeekday, addWeeks, addDays, weekdayOf } from './utils/week.js';
 import { allocatePartnerCode, orderedPair, syncChildPartnerCodes } from './utils/partners.js';
+import { listTaughtLessons, loadStudioStudentIdSet } from './utils/taughtLessons.js';
+import { feeForLesson, loadFloorFeeRates } from './utils/floorFees.js';
 
 /**
  * Demo data for local testing. Safe to re-run.
@@ -319,6 +321,56 @@ async function ensureRecurring({
   return rows[0].id;
 }
 
+/**
+ * Mark a past one-off booking complete and set its single charge's status.
+ * Skips bookings that already have a completion, so re-running is safe.
+ */
+async function ensureCharge({ studioId, teacherId, bookingId, lessonDate, status = 'due', method = null, collectedBy = 'coach' }) {
+  const { rows: existing } = await query('SELECT 1 FROM lesson_completions WHERE booking_id = $1', [bookingId]);
+  if (existing[0]) return;
+  const lesson = (await listTaughtLessons({ studioId, teacherId, from: lessonDate, to: lessonDate })).find(
+    (l) => l.bookingId === bookingId,
+  );
+  if (!lesson) return;
+  const [rates, studioStudentIds] = await Promise.all([
+    loadFloorFeeRates(studioId),
+    loadStudioStudentIdSet(studioId),
+  ]);
+  const floorFeeCents = feeForLesson(lesson, studioStudentIds, rates);
+  const { rows } = await query(
+    `INSERT INTO lesson_completions (
+       studio_id, teacher_id, slot_id, booking_id, student_id, child_name, lesson_date,
+       start_time, duration_min, price_cents, floor_fee_cents, status, completed_by_role
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'charged', 'teacher')
+     RETURNING id`,
+    [
+      studioId,
+      teacherId,
+      lesson.slotId,
+      bookingId,
+      lesson.studentId,
+      lesson.childName,
+      lessonDate,
+      lesson.startTime,
+      lesson.durationMin,
+      lesson.priceCents,
+      floorFeeCents,
+    ],
+  );
+  await query(
+    `INSERT INTO student_charges (
+       lesson_completion_id, student_id, amount_cents, floor_fee_cents, status, method,
+       reported_at, paid_at, collected_by
+     ) VALUES (
+       $1, $2, $3, $4, $5, $6,
+       CASE WHEN $5 IN ('reported', 'paid') THEN now() END,
+       CASE WHEN $5 = 'paid' THEN now() END,
+       CASE WHEN $5 = 'paid' THEN $7 END
+     )`,
+    [rows[0].id, lesson.studentId, lesson.priceCents, floorFeeCents, status, method, collectedBy],
+  );
+}
+
 async function seed() {
   const passwordHash = await bcrypt.hash('password123', 12);
   const today = todayISO();
@@ -369,10 +421,31 @@ async function seed() {
     bio: 'Inactive listing for testing the Active toggle.',
     isActive: false,
   });
+  const kaiId = await upsertTeacher({
+    email: 'kai@example.com',
+    passwordHash,
+    fullName: 'Kai Managed',
+    phone: '555-0400',
+    bio: 'Hula and island-style choreography. Schedule managed by the studio.',
+    defaultPriceCents: 6000,
+    trackPayments: true,
+  });
 
   await linkTeacherStudio(allenId, islandId);
   await linkTeacherStudio(mariaId, rhythmId);
   await linkTeacherStudio(inactiveId, islandId);
+  await linkTeacherStudio(kaiId, islandId);
+  await query(
+    'UPDATE teacher_studios SET owner_managed = true WHERE teacher_id = $1 AND studio_id = $2',
+    [kaiId, islandId],
+  );
+
+  // Payment tracking starts two weeks back so past demo lessons show up.
+  const trackingSince = addWeeks(thisMonday, -2);
+  await query('UPDATE teachers SET track_payments_since = $1 WHERE id = ANY($2::int[])', [
+    trackingSince,
+    [allenId, kaiId],
+  ]);
 
   await upsertStudioOwner({
     email: 'owner@example.com',
@@ -599,6 +672,51 @@ async function seed() {
     });
   }
 
+  // Payments: last week's lessons for Allen in each state, plus one still to complete.
+  const lastMonday = addWeeks(thisMonday, -1);
+  const pastLessons = [
+    { slot: allenForever['1-16:00'], weekday: 1, studentId: janeId, status: 'paid', method: 'cash' },
+    { slot: allenForever['2-16:30'], weekday: 2, studentId: alexId, status: 'reported', method: 'venmo' },
+    { slot: allenForever['3-17:00'], weekday: 3, studentId: parentId, childName: 'Ian Metler', status: 'due' },
+    { slot: allenForever['5-16:00'], weekday: 5, studentId: janeId, status: null },
+  ];
+  for (const p of pastLessons) {
+    if (!p.slot) continue;
+    const lessonDate = dateForWeekday(lastMonday, p.weekday);
+    const bookingId = await ensureBooking({
+      slotId: p.slot,
+      studentId: p.studentId,
+      lessonDate,
+      childName: p.childName || null,
+    });
+    if (p.status) {
+      await ensureCharge({
+        studioId: islandId,
+        teacherId: allenId,
+        bookingId,
+        lessonDate,
+        status: p.status,
+        method: p.method || null,
+      });
+    }
+  }
+
+  // Managed coach Kai: one lesson the studio collected, one still to complete.
+  const kaiTue = await ensureWeeklySlot({ teacherId: kaiId, weekday: 2, startTime: '15:00', priceCents: 6000 });
+  const kaiThu = await ensureWeeklySlot({ teacherId: kaiId, weekday: 4, startTime: '15:00', priceCents: 6000 });
+  const kaiPaidDate = dateForWeekday(lastMonday, 2);
+  const kaiPaidBooking = await ensureBooking({ slotId: kaiTue, studentId: alexId, lessonDate: kaiPaidDate });
+  await ensureCharge({
+    studioId: islandId,
+    teacherId: kaiId,
+    bookingId: kaiPaidBooking,
+    lessonDate: kaiPaidDate,
+    status: 'paid',
+    method: 'venmo',
+    collectedBy: 'studio',
+  });
+  await ensureBooking({ slotId: kaiThu, studentId: janeId, lessonDate: dateForWeekday(lastMonday, 4) });
+
   console.log('Seed complete.\n');
   console.log('Studios');
   console.log('  • Island Style Dance Studio  /studios/island-style-dance-studio');
@@ -609,12 +727,14 @@ async function seed() {
   console.log('  • allen@example.com   Allen          Island Style (payments on)');
   console.log('  • maria@example.com   Maria Chen     Rhythm Room');
   console.log('  • hidden@example.com  Hidden         inactive listing');
+  console.log('  • kai@example.com     Kai Managed    Island Style (managed by the studio)');
   console.log('\nStudents (password: password123)');
   console.log('  • student@example.com  Jane Student   regular student + weekly Fri 3pm');
   console.log('  • parent@example.com   Sam Metler     parent (Alina, Ian); Jane shares Alina');
   console.log('  • alex@example.com     Alex Rivera    pending weekly Wed 4pm');
   console.log('\nAlso seeded: forever slots, a 6-week Wed 6pm series, a one-time Thu slot,');
-  console.log('parent child bookings, a pending weekly request, and Island Style rooms + classes.');
+  console.log('parent child bookings, a pending weekly request, Island Style rooms + classes,');
+  console.log('and last week’s charges (paid, awaiting confirmation, due) for Allen and Kai.');
 }
 
 seed()

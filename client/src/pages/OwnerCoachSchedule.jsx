@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
@@ -92,6 +92,7 @@ function CoachProfileCards({ teacherId }) {
 
 export default function OwnerCoachSchedule() {
   const { teacherId } = useParams();
+  const [params] = useSearchParams();
   const id = Number(teacherId);
   const studioQuery = useQuery({
     queryKey: ['owner-studio'],
@@ -128,9 +129,11 @@ export default function OwnerCoachSchedule() {
   return (
     <>
       <TeacherDashboard ownerTeacher={teacher} />
-      <div className="container">
-        <CoachProfileCards teacherId={teacher.id} />
-      </div>
+      {params.get('tab') !== 'payments' && (
+        <div className="container">
+          <CoachProfileCards teacherId={teacher.id} />
+        </div>
+      )}
     </>
   );
 }

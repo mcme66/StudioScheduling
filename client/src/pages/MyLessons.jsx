@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
-import PaidToggle from '../components/PaidToggle.jsx';
+import StudentPayments from '../components/payments/StudentPayments.jsx';
 import Modal, { ModalOption } from '../components/Modal.jsx';
 import AddToCalendar from '../components/AddToCalendar.jsx';
 import WeekCalendar from '../components/WeekCalendar.jsx';
@@ -245,18 +245,15 @@ export default function MyLessons() {
     onError: (err) => toast(err.message),
   });
 
-  const paidMutation = useMutation({
-    mutationFn: ({ id, paid }) => api(`/bookings/${id}/paid`, { method: 'PATCH', body: { paid } }),
-    onSuccess: () => invalidate(),
-    onError: (err) => toast(err.message),
+  const paymentsQuery = useQuery({
+    queryKey: ['my-payments'],
+    queryFn: () => api('/payments/student'),
+    refetchInterval: 30000,
   });
-
-  const recurringPaidMutation = useMutation({
-    mutationFn: ({ id, date, paid }) =>
-      api(`/recurring/${id}/paid`, { method: 'PATCH', body: { date, paid } }),
-    onSuccess: () => invalidate(),
-    onError: (err) => toast(err.message),
-  });
+  const charges = paymentsQuery.data?.charges || [];
+  const tab = params.get('tab') === 'payments' ? 'payments' : 'lessons';
+  const showPaymentsTab = charges.length > 0 || tab === 'payments';
+  const dueCount = charges.filter((c) => c.status === 'due').length;
 
   const children = invitesQuery.data?.isParent ? invitesQuery.data.childrenNames || [] : [];
   const showChildTabs = children.length > 0;
@@ -306,9 +303,16 @@ export default function MyLessons() {
     return items;
   })();
 
-  const selectChild = (name) => {
-    setParams(name ? { child: name } : {}, { replace: true });
+  const updateParams = (changes) => {
+    const next = new URLSearchParams(params);
+    for (const [key, value] of Object.entries(changes)) {
+      if (value) next.set(key, value);
+      else next.delete(key);
+    }
+    setParams(next, { replace: true });
   };
+  const selectChild = (name) => updateParams({ child: name });
+  const selectTab = (id) => updateParams({ tab: id === 'lessons' ? null : id });
 
   const cancel = (id) => {
     if (window.confirm('Cancel this lesson? The slot will reopen for others.')) {
@@ -320,6 +324,30 @@ export default function MyLessons() {
     <div className="container owner-page">
       <h1 className="page-title">My lessons</h1>
       <p className="page-sub">Your upcoming bookings, weekly spots, and history.</p>
+
+      {showPaymentsTab && (
+        <div className="owner-tabs" role="tablist" aria-label="My lessons sections">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'lessons'}
+            className={`owner-tab${tab === 'lessons' ? ' on' : ''}`}
+            onClick={() => selectTab('lessons')}
+          >
+            Lessons
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'payments'}
+            className={`owner-tab${tab === 'payments' ? ' on' : ''}`}
+            onClick={() => selectTab('payments')}
+          >
+            Payments
+            {dueCount > 0 && <span className="tab-count">{dueCount}</span>}
+          </button>
+        </div>
+      )}
 
       {showChildTabs && (
         <div className="owner-tabs" role="tablist" aria-label="Children">
@@ -348,10 +376,14 @@ export default function MyLessons() {
         </div>
       )}
 
-      {isLoading && <div className="loading">Loading…</div>}
-      {isError && <p className="error-text">{error.message}</p>}
+      {tab === 'payments' && (
+        <StudentPayments query={paymentsQuery} charges={charges.filter(forChild)} />
+      )}
 
-      {data && (
+      {tab === 'lessons' && isLoading && <div className="loading">Loading…</div>}
+      {tab === 'lessons' && isError && <p className="error-text">{error.message}</p>}
+
+      {tab === 'lessons' && data && (
         <>
           {invites.length > 0 && (
             <div className="card lessons-invite" style={{ borderColor: '#f0c090', borderWidth: 2 }}>
@@ -495,8 +527,6 @@ export default function MyLessons() {
                 weeklySpots.map((r) => {
                   const exceptionFor = (date) =>
                     (r.exceptions || []).find((e) => e.date === date) || null;
-                  const paidFor = (date) =>
-                    (r.payments || []).find((p) => p.date === date)?.paid === true;
                   const occurrences = r.occurrences;
                   return (
                     <div className="weekly-spot" key={`r-${r.id}`}>
@@ -571,15 +601,6 @@ export default function MyLessons() {
                                 </div>
                               ) : (
                                 <div className="row" style={{ gap: '0.4rem' }}>
-                                  {r.trackPayments && r.canMarkPaid !== false && (
-                                    <PaidToggle
-                                      paid={paidFor(date)}
-                                      disabled={recurringPaidMutation.isPending}
-                                      onChange={(paid) =>
-                                        recurringPaidMutation.mutate({ id: r.id, date, paid })
-                                      }
-                                    />
-                                  )}
                                   <button
                                     type="button"
                                     className="btn btn-ghost btn-sm"
@@ -655,13 +676,6 @@ export default function MyLessons() {
                       ) : (
                         <>
                       {b.isPartner && <span className="pill pill-partner">Partner</span>}
-                      {b.trackPayments && b.canMarkPaid !== false && (
-                        <PaidToggle
-                          paid={b.paid}
-                          disabled={paidMutation.isPending}
-                          onChange={(paid) => paidMutation.mutate({ id: b.id, paid })}
-                        />
-                      )}
                       <button
                         type="button"
                         className="btn btn-ghost btn-sm"
@@ -713,13 +727,6 @@ export default function MyLessons() {
                     </div>
                     <div className="row" style={{ gap: '0.4rem' }}>
                       {b.isPartner && <span className="pill pill-partner">Partner</span>}
-                      {b.trackPayments && b.canMarkPaid !== false && (
-                        <PaidToggle
-                          paid={b.paid}
-                          disabled={paidMutation.isPending}
-                          onChange={(paid) => paidMutation.mutate({ id: b.id, paid })}
-                        />
-                      )}
                     </div>
                   </div>
                 ))

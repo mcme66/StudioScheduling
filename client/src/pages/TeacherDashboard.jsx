@@ -1,11 +1,12 @@
 import { useState, useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useToast } from '../components/Toast.jsx';
 import SharePanel from '../components/SharePanel.jsx';
-import PaidToggle from '../components/PaidToggle.jsx';
+import CoachPayments, { useCoachPayments } from '../components/payments/CoachPayments.jsx';
+import LessonDefaultsCard from '../components/owner/LessonDefaultsCard.jsx';
 import Modal, { ModalOption } from '../components/Modal.jsx';
 import AddToCalendar from '../components/AddToCalendar.jsx';
 import StudioRoomsSchedule from '../components/StudioRoomsSchedule.jsx';
@@ -57,8 +58,6 @@ function mergeWeekLessons(data, weekStart) {
         canUndo: cancelled && !isSlotPast(date, r.startTime),
         student: r.student,
         paymentPartner: r.paymentPartner,
-        paid: r.paid,
-        partnerPaid: r.partnerPaid,
         source: r,
       }];
     }),
@@ -75,8 +74,6 @@ function mergeWeekLessons(data, weekStart) {
       canUndo: b.status === 'cancelled' && b.canUndo === true && !isSlotPast(b.lessonDate, b.startTime),
       student: b.student,
       paymentPartner: b.paymentPartner,
-      paid: b.paid,
-      partnerPaid: b.partnerPaid,
       source: b,
     })),
   ];
@@ -119,24 +116,6 @@ function StudentLessonInfo({ student, paymentPartner }) {
   );
 }
 
-function firstName(full) {
-  const trimmed = String(full || '').trim();
-  return trimmed.split(/\s+/)[0] || trimmed;
-}
-
-function PartnershipPaidStatus({ bookerName, partnerName, paid, partnerPaid }) {
-  return (
-    <div className="partner-paid-status">
-      <span>
-        {firstName(bookerName)}: {paid ? 'Paid' : 'Unpaid'}
-      </span>
-      <span>
-        {firstName(partnerName)}: {partnerPaid ? 'Paid' : 'Unpaid'}
-      </span>
-    </div>
-  );
-}
-
 function lessonPersonName(student) {
   return student.childName || student.name;
 }
@@ -175,9 +154,6 @@ function lessonRequested(requests, item) {
 function LessonRow({
   item,
   whenLabel,
-  trackPayments,
-  onPaidChange,
-  paidPending,
   onAddToCalendar,
   onManage,
   onUndo,
@@ -218,25 +194,6 @@ function LessonRow({
       ) : (
         <div className="row" style={{ gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           {upNext && <span className="pill pill-taken">Up next</span>}
-          {trackPayments && item.paymentPartner && (
-            <PartnershipPaidStatus
-              bookerName={item.student.name}
-              partnerName={item.paymentPartner.name}
-              paid={item.paid === true}
-              partnerPaid={item.partnerPaid === true}
-            />
-          )}
-          {trackPayments && (
-            <PaidToggle
-              paid={
-                item.paymentPartner
-                  ? item.paid === true && item.partnerPaid === true
-                  : item.paid === true
-              }
-              disabled={paidPending}
-              onChange={onPaidChange}
-            />
-          )}
           <button
             type="button"
             className="btn btn-ghost btn-sm"
@@ -347,6 +304,23 @@ export default function TeacherDashboard({ ownerTeacher = null }) {
   const viewOnly =
     !ownerTeacher &&
     (bookingsQuery.data?.ownerManaged === true || todayBookingsQuery.data?.ownerManaged === true);
+  const [params, setParams] = useSearchParams();
+  const showTabs = !!ownerTeacher || (!viewOnly && todayBookingsQuery.data?.paymentsEnabled === true);
+  const activeTab = showTabs && params.get('tab') === 'payments' ? 'payments' : 'schedule';
+  const selectTab = (id) => {
+    const next = new URLSearchParams(params);
+    if (id === 'schedule') next.delete('tab');
+    else next.set('tab', id);
+    setParams(next, { replace: true });
+  };
+  const coachPaymentsQuery = useCoachPayments(ownerTeacher, showTabs);
+  const paymentsBadge = coachPaymentsQuery.data
+    ? coachPaymentsQuery.data.toComplete.length +
+      coachPaymentsQuery.data.completed.reduce(
+        (n, c) => n + c.charges.filter((ch) => ch.status === 'reported').length,
+        0,
+      )
+    : 0;
   const studioDetailQuery = useQuery({
     queryKey: ['studio', studioSlug],
     queryFn: () => api(`/studios/${studioSlug}`),
@@ -455,22 +429,6 @@ export default function TeacherDashboard({ ownerTeacher = null }) {
     onError: (err) => toast(err.message),
   });
 
-  const paidMutation = useMutation({
-    mutationFn: ({ id, paid }) =>
-      api(withTeacher(`/bookings/${id}/paid`), { method: 'PATCH', body: { paid } }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['teacher-bookings'] }),
-    onError: (err) => toast(err.message),
-  });
-
-  const recurringPaidMutation = useMutation({
-    mutationFn: ({ id, date, paid }) =>
-      api(withTeacher(`/recurring/${id}/paid`), { method: 'PATCH', body: { date, paid } }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['teacher-bookings'] });
-    },
-    onError: (err) => toast(err.message),
-  });
-
   const decide = useMutation({
     mutationFn: ({ id, action }) => api(withTeacher(`/recurring/${id}/${action}`), { method: 'POST' }),
     onSuccess: (data, { action }) => {
@@ -562,9 +520,11 @@ export default function TeacherDashboard({ ownerTeacher = null }) {
         {ownerTeacher ? `${ownerTeacher.fullName}’s schedule` : 'Your schedule'}
       </h1>
       <p className="page-sub">
-        {ownerTeacher
-          ? 'Manage this coach’s lesson times, bookings, and weekly spot requests.'
-          : 'Manage lesson times for the week you’re viewing, bookings, and weekly spot requests.'}
+        {activeTab === 'payments'
+          ? 'Mark lessons complete, track what students owe, and record payments.'
+          : ownerTeacher
+            ? 'Manage this coach’s lesson times, bookings, and weekly spot requests.'
+            : 'Manage lesson times for the week you’re viewing, bookings, and weekly spot requests.'}
       </p>
       {viewOnly && (
         <p className="managed-banner">
@@ -573,6 +533,34 @@ export default function TeacherDashboard({ ownerTeacher = null }) {
         </p>
       )}
 
+      {showTabs && (
+        <div className="owner-tabs" role="tablist" aria-label="Dashboard sections">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'schedule'}
+            className={`owner-tab${activeTab === 'schedule' ? ' on' : ''}`}
+            onClick={() => selectTab('schedule')}
+          >
+            Schedule
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'payments'}
+            className={`owner-tab${activeTab === 'payments' ? ' on' : ''}`}
+            onClick={() => selectTab('payments')}
+          >
+            Payments
+            {paymentsBadge > 0 && <span className="tab-count">{paymentsBadge}</span>}
+          </button>
+        </div>
+      )}
+
+      {activeTab === 'payments' && <CoachPayments ownerTeacher={ownerTeacher} />}
+
+      {activeTab === 'schedule' && (
+      <>
       {(studioRooms.length > 0 || studioClasses.length > 0) && (
         <StudioRoomsSchedule
           rooms={studioRooms}
@@ -675,18 +663,12 @@ export default function TeacherDashboard({ ownerTeacher = null }) {
             <TodaySchedule
               data={todayBookingsQuery.data}
               weekStart={baseMonday}
-              trackPayments={viewOnly ? false : todayBookingsQuery.data.trackPayments}
               requestMode={viewOnly}
               cancellationRequests={todayBookingsQuery.data.cancellationRequests}
               onManageBooking={(b) => setDialog({ type: 'booking', booking: b })}
               onManageRecurring={(r) =>
                 setDialog({ type: 'recurring', recurring: r, weekStart: baseMonday })
               }
-              onPaidChange={(id, paid) => paidMutation.mutate({ id, paid })}
-              onRecurringPaidChange={({ id, date, paid }) =>
-                recurringPaidMutation.mutate({ id, date, paid })
-              }
-              paidPending={paidMutation.isPending || recurringPaidMutation.isPending}
               onAddToCalendar={setCalendarTarget}
               onUndo={(item) => undoCancellation.mutate(item)}
               undoPending={undoCancellation.isPending}
@@ -700,16 +682,10 @@ export default function TeacherDashboard({ ownerTeacher = null }) {
             <BookingsList
               data={bookingsQuery.data}
               weekStart={weekStart}
-              trackPayments={viewOnly ? false : bookingsQuery.data.trackPayments}
               requestMode={viewOnly}
               cancellationRequests={bookingsQuery.data.cancellationRequests}
               onManageBooking={(b) => setDialog({ type: 'booking', booking: b })}
               onManageRecurring={(r) => setDialog({ type: 'recurring', recurring: r })}
-              onPaidChange={(id, paid) => paidMutation.mutate({ id, paid })}
-              onRecurringPaidChange={({ id, date, paid }) =>
-                recurringPaidMutation.mutate({ id, date, paid })
-              }
-              paidPending={paidMutation.isPending || recurringPaidMutation.isPending}
               onAddToCalendar={setCalendarTarget}
               onUndo={(item) => undoCancellation.mutate(item)}
               undoPending={undoCancellation.isPending}
@@ -833,13 +809,27 @@ export default function TeacherDashboard({ ownerTeacher = null }) {
         )}
       </div>
 
-      {!viewOnly && (
-        <SharePanel
-          teacherId={teacherId}
-          studios={studios}
-          openSlots={openUpcoming}
-          weekLabel={weekRangeLabel(weekStart)}
-        />
+      {ownerTeacher ? (
+        <div className="dashboard-split">
+          <SharePanel
+            teacherId={teacherId}
+            studios={studios}
+            openSlots={openUpcoming}
+            weekLabel={weekRangeLabel(weekStart)}
+          />
+          <LessonDefaultsCard teacherId={teacherId} />
+        </div>
+      ) : (
+        !viewOnly && (
+          <SharePanel
+            teacherId={teacherId}
+            studios={studios}
+            openSlots={openUpcoming}
+            weekLabel={weekRangeLabel(weekStart)}
+          />
+        )
+      )}
+      </>
       )}
 
       {dialog?.type === 'recurring' && (
@@ -1128,20 +1118,6 @@ export default function TeacherDashboard({ ownerTeacher = null }) {
   );
 }
 
-function lessonPaidHandler(item, weekStart, onPaidChange, onRecurringPaidChange) {
-  return (paid) => {
-    if (item.kind === 'recurring') {
-      onRecurringPaidChange({
-        id: item.source.id,
-        date: item.source.lessonDate || dateForWeekday(weekStart, item.source.weekday),
-        paid,
-      });
-    } else {
-      onPaidChange(item.source.id, paid);
-    }
-  };
-}
-
 function lessonManageHandler(item, onManageBooking, onManageRecurring) {
   return () => {
     if (item.kind === 'recurring') onManageRecurring(item.source);
@@ -1152,12 +1128,8 @@ function lessonManageHandler(item, onManageBooking, onManageRecurring) {
 function BookingsList({
   data,
   weekStart,
-  trackPayments,
   onManageBooking,
   onManageRecurring,
-  onPaidChange,
-  onRecurringPaidChange,
-  paidPending,
   onAddToCalendar,
   onUndo,
   undoPending = false,
@@ -1183,9 +1155,6 @@ function BookingsList({
               key={item.key}
               item={item}
               whenLabel={item.kind === 'recurring' ? 'Weekly' : 'One-time'}
-              trackPayments={trackPayments}
-              onPaidChange={lessonPaidHandler(item, weekStart, onPaidChange, onRecurringPaidChange)}
-              paidPending={paidPending}
               onAddToCalendar={onAddToCalendar}
               onManage={lessonManageHandler(item, onManageBooking, onManageRecurring)}
               onUndo={() => onUndo(item)}
@@ -1203,12 +1172,8 @@ function BookingsList({
 function TodaySchedule({
   data,
   weekStart,
-  trackPayments,
   onManageBooking,
   onManageRecurring,
-  onPaidChange,
-  onRecurringPaidChange,
-  paidPending,
   onAddToCalendar,
   onUndo,
   undoPending = false,
@@ -1230,9 +1195,6 @@ function TodaySchedule({
           key={item.key}
           item={item}
           whenLabel={item.kind === 'recurring' ? 'Weekly' : 'One-time'}
-          trackPayments={trackPayments}
-          onPaidChange={lessonPaidHandler(item, weekStart, onPaidChange, onRecurringPaidChange)}
-          paidPending={paidPending}
           onAddToCalendar={onAddToCalendar}
           onManage={lessonManageHandler(item, onManageBooking, onManageRecurring)}
           onUndo={() => onUndo(item)}

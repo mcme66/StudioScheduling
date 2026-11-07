@@ -77,10 +77,6 @@ async function resolveChildName(client, studentId, requestedChildName) {
   return match;
 }
 
-const paidSchema = z.object({
-  paid: z.boolean(),
-});
-
 bookingsRouter.post(
   '/',
   requireAuth,
@@ -170,11 +166,11 @@ bookingsRouter.get(
     const visibleIds = [bookerStudentId, ...new Set(links.map((l) => l.partnerId))];
 
     const { rows: bookings } = await query(
-      `SELECT b.id, b.lesson_date, b.status, b.cancelled_by, b.created_at, b.paid, b.partner_paid, b.child_name,
+      `SELECT b.id, b.lesson_date, b.status, b.cancelled_by, b.created_at, b.child_name,
               b.student_id, b.payment_partner_id,
               st.full_name AS booker_name, pp.full_name AS payment_partner_name,
               s.weekday, s.start_time, s.duration_min, s.price_cents,
-              t.id AS teacher_id, t.full_name AS teacher_name, t.track_payments
+              t.id AS teacher_id, t.full_name AS teacher_name
          FROM bookings b
          JOIN slots s ON s.id = b.slot_id
          JOIN teachers t ON t.id = s.teacher_id
@@ -204,7 +200,7 @@ bookingsRouter.get(
               st.full_name AS booker_name, pp.full_name AS payment_partner_name,
               s.weekday, s.start_time, s.duration_min, s.price_cents,
               s.series_start_date, s.series_end_date,
-              t.id AS teacher_id, t.full_name AS teacher_name, t.track_payments
+              t.id AS teacher_id, t.full_name AS teacher_name
          FROM recurring_assignments ra
          JOIN slots s ON s.id = ra.slot_id
          JOIN teachers t ON t.id = s.teacher_id
@@ -250,37 +246,13 @@ bookingsRouter.get(
       }
     }
 
-    let paymentsByRecurring = new Map();
-    if (visibleRecurring.length) {
-      const recurringIds = visibleRecurring.map((r) => r.id);
-      const { rows: payRows } = await query(
-        `SELECT recurring_assignment_id, lesson_date, paid, partner_paid
-           FROM recurring_lesson_payments
-          WHERE recurring_assignment_id = ANY($1::int[])
-            AND lesson_date >= $2`,
-        [recurringIds, today],
-      );
-      for (const p of payRows) {
-        const rid = p.recurring_assignment_id;
-        if (!paymentsByRecurring.has(rid)) paymentsByRecurring.set(rid, []);
-        paymentsByRecurring.get(rid).push({
-          date: fmtDate(p.lesson_date),
-          paid: p.paid === true,
-          partnerPaid: p.partner_paid === true,
-        });
-      }
-    }
-
     const accessFor = (row) => {
       const isBooker = row.student_id === bookerStudentId;
-      const isPaymentPartner = row.payment_partner_id === bookerStudentId;
       return {
         isPartner: !isBooker,
         partnerName: isBooker ? null : row.booker_name || null,
         paymentPartner: paymentPartnerPayload(row.payment_partner_id, row.payment_partner_name),
-        canMarkPaid: isBooker || isPaymentPartner,
         canManage: isBooker,
-        isPaymentPartner,
       };
     };
 
@@ -293,15 +265,12 @@ bookingsRouter.get(
         startTime: fmtTime(b.start_time),
         durationMin: b.duration_min,
         priceCents: b.price_cents,
-        paid: access.isPaymentPartner ? b.partner_paid === true : b.paid === true,
-        trackPayments: b.track_payments === true,
         childName: b.child_name || null,
         teacher: { id: b.teacher_id, name: b.teacher_name },
         past,
         isPartner: access.isPartner,
         partnerName: access.partnerName,
         paymentPartner: access.paymentPartner,
-        canMarkPaid: access.canMarkPaid,
         canManage: access.canManage,
         status: b.status,
         cancelledBy: b.cancelled_by || null,
@@ -336,7 +305,6 @@ bookingsRouter.get(
         const nextOccurrence = nextWeekdayOnOrAfter(from, r.weekday);
         if (!recurringCoversDate(nextOccurrence, startsOn, seriesStart, seriesEnd)) return [];
         const access = accessFor(r);
-        const rawPayments = paymentsByRecurring.get(r.id) || [];
         return [{
           id: r.id,
           slotId: r.slot_id,
@@ -344,89 +312,19 @@ bookingsRouter.get(
           startTime: fmtTime(r.start_time),
           durationMin: r.duration_min,
           priceCents: r.price_cents,
-          trackPayments: r.track_payments === true,
           childName: r.child_name || null,
           startsOn,
           seriesStartDate: seriesStart,
           seriesEndDate: seriesEnd,
           teacher: { id: r.teacher_id, name: r.teacher_name },
           exceptions: exceptionsBySlot.get(r.slot_id) || [],
-          payments: rawPayments.map((p) => ({
-            date: p.date,
-            paid: access.isPaymentPartner ? p.partnerPaid : p.paid,
-          })),
           isPartner: access.isPartner,
           partnerName: access.partnerName,
           paymentPartner: access.paymentPartner,
-          canMarkPaid: access.canMarkPaid,
           canManage: access.canManage,
         }];
       }),
     });
-  }),
-);
-
-bookingsRouter.patch(
-  '/:id/paid',
-  requireAuth,
-  asyncHandler(async (req, res) => {
-    const id = Number(req.params.id);
-    const { paid } = paidSchema.parse(req.body);
-
-    const { rows } = await query(
-      `SELECT b.*, s.teacher_id, t.track_payments
-         FROM bookings b
-         JOIN slots s ON s.id = b.slot_id
-         JOIN teachers t ON t.id = s.teacher_id
-        WHERE b.id = $1`,
-      [id],
-    );
-    const booking = rows[0];
-    if (!booking || booking.status !== 'booked') {
-      throw new HttpError(404, 'Booking not found.');
-    }
-    if (!booking.track_payments) {
-      throw new HttpError(403, 'This instructor does not track payments.');
-    }
-
-    const bookerStudentId =
-      req.user.role === 'student' || req.user.role === 'teacher'
-        ? await resolveBookerStudentId(req.user).catch(() => null)
-        : null;
-    const isOwnerStudent = bookerStudentId != null && booking.student_id === bookerStudentId;
-    const isPaymentPartner =
-      bookerStudentId != null && booking.payment_partner_id === bookerStudentId;
-    const isOwnerTeacher = await isScheduleTeacher(req, booking.teacher_id);
-    if (req.user.role === 'teacher' && booking.teacher_id === req.user.id) {
-      await assertCoachMayEdit(req);
-    }
-    if (!isOwnerStudent && !isPaymentPartner && !isOwnerTeacher) {
-      throw new HttpError(403, 'You cannot update payment for this booking.');
-    }
-
-    let updated;
-    if (isOwnerTeacher) {
-      const result = await query(
-        'UPDATE bookings SET paid = $1, partner_paid = $1 WHERE id = $2 RETURNING id, paid, partner_paid',
-        [paid, id],
-      );
-      updated = result.rows[0];
-    } else if (isPaymentPartner && !isOwnerStudent) {
-      const result = await query(
-        'UPDATE bookings SET partner_paid = $1 WHERE id = $2 RETURNING id, paid, partner_paid',
-        [paid, id],
-      );
-      updated = result.rows[0];
-    } else {
-      const result = await query(
-        'UPDATE bookings SET paid = $1 WHERE id = $2 RETURNING id, paid, partner_paid',
-        [paid, id],
-      );
-      updated = result.rows[0];
-    }
-    const viewerPaid =
-      isPaymentPartner && !isOwnerStudent ? updated.partner_paid === true : updated.paid === true;
-    res.json({ booking: { id: updated.id, paid: viewerPaid } });
   }),
 );
 

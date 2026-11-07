@@ -11,7 +11,7 @@ export function ToastProvider({ children }) {
     setMessage(msg);
     setShow(true);
     clearTimeout(timer.current);
-    timer.current = setTimeout(() => setShow(false), 2600);
+    timer.current = setTimeout(() => setShow(false), Math.max(2600, String(msg).length * 50));
   }, []);
 
   return (

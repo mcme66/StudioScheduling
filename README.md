@@ -7,13 +7,13 @@ A self-hosted lesson booking app on the PERN stack (PostgreSQL, Express, React, 
 - **Studios** — public homepage lists studios; each studio shows its rooms, class timetable, and instructors.
 - Separate **teacher**, **student**, and **studio owner** accounts. Owners sign in from the teacher login page.
 - Studio owners publish **rooms** and a weekly **class schedule** (view-only for students and teachers).
-- Studio owners can review **coach lesson lists** and **expected floor fees** (higher of a percent of lesson price or a flat fee) by week or month.
+- Studio owners can review **coach lesson lists** and **floor fees** (higher of a percent of lesson price or a flat fee) by week or month. Owner metrics count only completed lessons: lessons a coach marked **Lesson complete** (using the price and fee saved then), plus past scheduled lessons for coaches who don't track payments. **No charge** lessons, and tracked lessons not marked yet, are left out.
 - Students book a slot for a specific week (up to 2 weeks ahead), cancel their own lessons, and manage upcoming + past bookings.
 - **Weekly spots** — students request a recurring time; teachers approve or decline.
 - **Parent accounts** — a student can mark themselves as a parent, list children, and book under a child’s name (contact stays on the parent account).
 - **Teachers as students** — teachers can enable “Student as well?” on their profile to book on *other* instructors’ schedules (not their own).
 - **Slot series** — teachers create one-time slots or weekly series (count, until a date, or forever), and can end a series from a given week forward.
-- **Payments** — optional per-teacher payment tracking on bookings.
+- **Payments** — with **Track payments** on (always on for studio-managed coaches), the coach Dashboard gets a **Payments** tab. Coaches mark past lessons **Lesson complete** to charge the student (split 50/50 with a payment partner). Students see charges on a **Payments** tab in My Lessons and report cash or Venmo payments, which the coach confirms. Paid lessons add the studio floor fee to the coach's balance; for managed coaches the studio collects and owes the coach a payout instead. Each paid lesson then shows up on the owner's **Requests** page, where the owner marks it **Floor Fee Received** (or **Payout Sent** for studio-collected lessons) to settle it.
 - **Inactive listing** — new teachers start inactive; the Active toggle controls whether they appear on the studio page.
 - **Calendar** — add lessons to Google Calendar / download `.ics` from My Lessons and confirmation emails.
 - Confirmation, approval, and reminder emails (or console-logged when SMTP is unset).
@@ -45,10 +45,12 @@ server/.env.example  Local API env — copy to server/.env
 | `/studios/:slug/book/:teacherId` | Public to view; login to book | Instructor schedule |
 | `/student/login`, `/student/register` | Public | Student auth |
 | `/teacher/login`, `/teacher/register` | Public | Teacher auth (owners also log in here) |
-| `/my-lessons` | Student (or teacher with “Student as well?”) | Bookings & weekly spots |
-| `/teacher` | Teacher | Dashboard: slots, bookings, weekly requests, studio class timetable |
+| `/my-lessons` | Student (or teacher with “Student as well?”) | Bookings & weekly spots; `?tab=payments` for charges |
+| `/teacher` | Teacher | Dashboard: slots, bookings, weekly requests, studio class timetable; `?tab=payments` when tracking payments |
 | `/owner` | Studio owner | Rooms, class schedule, studio details, coaches |
+| `/owner/requests` | Studio owner | Floor fees and payouts to settle per lesson, plus managed-coach cancellation requests |
 | `/owner/coaches/:teacherId` | Studio owner | Lessons a coach taught in a chosen week or month |
+| `/owner/coaches/:teacherId/schedule` | Studio owner | A managed coach's dashboard, including their Payments tab |
 | `/profile` | Signed-in user | Profile, parent toggle, teacher settings |
 
 ## Quick start (Docker Compose)
@@ -93,9 +95,10 @@ Log in at `/teacher/login`. Each studio has at most one owner.
 
 | Email | Name | Studio | Notes |
 |-------|------|--------|--------|
-| `allen@example.com` | Allen | Island Style | Payment tracking on; forever weekly slots, a 6-week Wed 6pm series, and a one-time Thu slot |
+| `allen@example.com` | Allen | Island Style | Payment tracking on; forever weekly slots, a 6-week Wed 6pm series, and a one-time Thu slot; last week's lessons are paid, awaiting confirmation, due, and still to complete |
 | `maria@example.com` | Maria Chen | Rhythm Room | Ballet/contemporary; no payment tracking |
 | `hidden@example.com` | Hidden Instructor | Island Style | **Inactive** — not listed on the studio page (tests the Active toggle) |
+| `kai@example.com` | Kai Managed | Island Style | **Managed** by the studio; the owner sees Kai's Payments tab (one lesson paid to the studio, one to complete) |
 
 ### Students
 
@@ -217,12 +220,16 @@ Vite proxies `/api` to the API so auth cookies work on one origin. `Ctrl+C` stop
 - `studios` — locations (`name`, `slug`, `description`)
 - `studio_owners` — one owner per studio (`studio_id` unique); owners log in from the teacher login page
 - `rooms` / `class_schedules` — studio-published rooms and weekly group-class timetable (view-only)
-- `teacher_studios` — teacher ↔ studio (one studio at a time in the UI)
+- `teacher_studios` — teacher ↔ studio (one studio at a time in the UI); `floor_fee_exempt` (set only by the studio owner) means that coach's lessons carry no floor fee
 - `teachers` / `students` — accounts; teachers may set `can_book_as_student` and link to a student row by email for booking FKs
 - `students.is_parent` / `children_names` — parent booking
 - `slots` — availability (weekday/time, optional one-off date, series start/end)
 - `recurring_assignments` — weekly-spot requests (`pending` / `approved` / `declined` / …)
 - `bookings` — dated lessons (`booked` / `cancelled`), optional `child_name`, reminders
+- `teachers.track_payments` / `track_payments_since` — payment tracking toggle and the first lesson date it covers
+- `lesson_completions` — a past lesson the coach marked complete (`charged`) or no charge (`skipped`), with price and floor-fee snapshots
+- `student_charges` — what each student owes for a completed lesson (`due` / `reported` / `paid`), payment method, and who collected it (`coach` / `studio`)
+- `studio_settlements` — floor fees a coach paid the studio, or payouts the studio sent a managed coach
 
 A slot is taken for a week if it has an approved weekly holder (unless that week is skipped) or a booked lesson on that date. Overlap rules for weekly series are enforced in the API.
 

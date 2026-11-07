@@ -254,6 +254,19 @@ export default function CoachesTab() {
     onError: (err) => toast(err.message),
   });
 
+  const setFeeExempt = useMutation({
+    mutationFn: ({ id, exempt }) =>
+      api(`/owner/teachers/${id}/floor-fee-exempt`, { method: 'PATCH', body: { exempt } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['owner-coaches'] });
+      queryClient.invalidateQueries({ queryKey: ['owner-studio'] });
+      queryClient.invalidateQueries({ queryKey: ['owner-floor-fees'] });
+      queryClient.invalidateQueries({ queryKey: ['owner-dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['owner-coach-lessons'] });
+    },
+    onError: (err) => toast(err.message),
+  });
+
   const setTier = useMutation({
     mutationFn: ({ id, tierId }) =>
       api(`/owner/teachers/${id}/tier`, { method: 'PATCH', body: { tierId } }),
@@ -367,6 +380,17 @@ export default function CoachesTab() {
                         >
                           <span className={`switch${coach.ownerManaged ? ' on' : ''}`} />
                           Manage
+                        </button>
+                        <button
+                          type="button"
+                          className={`manage-toggle${coach.floorFeeExempt ? ' on' : ''}`}
+                          aria-pressed={coach.floorFeeExempt}
+                          title="Lessons by this coach carry no floor fee"
+                          disabled={setFeeExempt.isPending}
+                          onClick={() => setFeeExempt.mutate({ id: coach.id, exempt: !coach.floorFeeExempt })}
+                        >
+                          <span className={`switch${coach.floorFeeExempt ? ' on' : ''}`} />
+                          Floor Fee Exempt
                         </button>
                         {coach.ownerManaged && (
                           <Link className="btn btn-ghost btn-sm" to={`/owner/coaches/${coach.id}/schedule`}>

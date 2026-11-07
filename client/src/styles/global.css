@@ -598,34 +598,6 @@ a:hover {
   padding: 6px 11px;
 }
 
-.paid-toggle {
-  font-size: 12px;
-  padding: 6px 11px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--white);
-  color: var(--muted);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.paid-toggle:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.paid-toggle.paid {
-  background: var(--green);
-  border-color: var(--green);
-  color: white;
-}
-.paid-toggle.paid:hover:not(:disabled) {
-  background: var(--green-dark);
-  border-color: var(--green-dark);
-}
-.paid-toggle:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
 /* Inline helpers */
 .error-text {
   color: var(--danger);
@@ -709,16 +681,6 @@ a:hover {
 .partner-add .btn {
   height: 42px;
 }
-.partner-paid-status {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  font-size: 11px;
-  color: var(--muted);
-  line-height: 1.35;
-  white-space: nowrap;
-}
-
 /* Modal */
 .modal-backdrop {
   position: fixed;
@@ -1086,6 +1048,95 @@ a:hover {
   border-color: var(--accent);
   color: var(--accent-dark);
   background: var(--accent-light);
+}
+.tab-count {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: white;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+
+/* Payments */
+.pay-summary {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  margin-bottom: 1rem;
+}
+.pay-stat {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.8rem 1rem;
+}
+.pay-stat-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.pay-stat-value {
+  font-size: 1.35rem;
+  font-weight: 600;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.pay-stat-note {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.list-row.pay-row {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.pay-row .grow {
+  min-width: 160px;
+}
+.pay-row > :last-child {
+  margin-left: auto;
+}
+.pay-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.4rem;
+}
+.pay-amount {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.pay-charge-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  font-size: 13px;
+}
+.pay-charge-line + .pay-charge-line {
+  margin-top: 0.35rem;
+}
+.pill-paid {
+  background: var(--green-light);
+  color: var(--green);
+}
+.pill-due {
+  background: #fde7e4;
+  color: #a2321f;
+}
+.pill-muted {
+  background: var(--cream);
+  color: var(--muted);
 }
 .owner-grid {
   display: grid;

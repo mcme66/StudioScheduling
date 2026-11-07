@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
 import Modal from '../components/Modal.jsx';
+import SettlementRequests from '../components/owner/SettlementRequests.jsx';
 import { WEEKDAYS, fmtDate, fmtTimeRange } from '../lib/format.js';
 
 export default function OwnerCancellationRequests() {
@@ -67,17 +68,17 @@ export default function OwnerCancellationRequests() {
       <p style={{ marginTop: 0 }}>
         <Link to="/owner">← Studio</Link>
       </p>
-      <h1 className="page-title">Cancellation requests</h1>
-      <p className="page-sub">
-        Managed coaches ask here instead of changing the lesson themselves. Apply the cancellation,
-        fill it with another coach at your studio, or dismiss it and leave the schedule as it is.
-      </p>
+      <h1 className="page-title">Requests</h1>
+      <p className="page-sub">Settle paid lessons with your coaches and handle cancellation requests.</p>
+
+      <SettlementRequests />
 
       {requestsQuery.isLoading && <div className="loading">Loading…</div>}
       {requestsQuery.isError && <p className="error-text">{requestsQuery.error.message}</p>}
 
       {!requestsQuery.isLoading && requests.length === 0 && (
         <div className="card">
+          <div className="section-title">Cancellation requests</div>
           <p className="muted" style={{ margin: 0 }}>
             No cancellation requests right now.
           </p>
@@ -86,6 +87,12 @@ export default function OwnerCancellationRequests() {
 
       {requests.length > 0 && (
         <div className="card">
+          <div className="section-title">Cancellation requests</div>
+          <p className="request-note">
+            Managed coaches ask here instead of changing the lesson themselves. Apply the
+            cancellation, fill it with another coach at your studio, or dismiss it and leave the
+            schedule as it is.
+          </p>
           {requests.map((request) => {
             const when = request.series
               ? `Every ${WEEKDAYS[request.weekday]} · ${fmtTimeRange(request.startTime, request.durationMin)}`

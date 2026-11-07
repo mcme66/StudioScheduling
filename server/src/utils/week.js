@@ -101,3 +101,10 @@ export function isLessonPast(lessonDate, startTime) {
   const t = typeof startTime === 'string' ? startTime.slice(0, 5) : startTime;
   return new Date(`${lessonDate}T${t}:00`).getTime() <= Date.now();
 }
+
+/** True when the lesson's end time (start + duration) is now or in the past (local server time). */
+export function isLessonFinished(lessonDate, startTime, durationMin) {
+  const t = typeof startTime === 'string' ? startTime.slice(0, 5) : startTime;
+  const start = new Date(`${lessonDate}T${t}:00`).getTime();
+  return start + (Number(durationMin) || 0) * 60_000 <= Date.now();
+}

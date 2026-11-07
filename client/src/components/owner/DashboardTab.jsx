@@ -40,8 +40,12 @@ export default function DashboardTab() {
       {stats && (
         <>
           <div className="owner-grid cols-3">
-            <Kpi label="Lessons" value={String(stats.lessons)} />
-            <Kpi label="Expected floor fees" value={fmtPrice(stats.floorFeeCents)} />
+            <Kpi
+              label="Lessons"
+              value={String(stats.lessons)}
+              hint={stats.awaitingCount > 0 ? `${stats.awaitingCount} more awaiting completion` : undefined}
+            />
+            <Kpi label="Floor fees" value={fmtPrice(stats.floorFeeCents)} />
             <Kpi label="Lesson revenue" value={fmtPrice(stats.revenueCents)} />
             <Kpi label="Students" value={String(stats.uniqueStudents)} hint="Unique people in lessons" />
             <Kpi
@@ -56,14 +60,16 @@ export default function DashboardTab() {
             <div className="card">
               <div className="section-title">Lessons</div>
               <p className="muted" style={{ fontSize: '13px', marginBottom: '0.85rem' }}>
-                Lessons taught in this period.
+                Lessons coaches marked complete, plus past lessons for coaches who don&apos;t track
+                payments. No-charge lessons aren&apos;t counted.
               </p>
               <BarChart points={stats.series} valueKey="lessons" formatValue={(n) => String(n)} />
             </div>
             <div className="card">
-              <div className="section-title">Expected floor fees</div>
+              <div className="section-title">Floor fees</div>
               <p className="muted" style={{ fontSize: '13px', marginBottom: '0.85rem' }}>
-                Studio-student lessons use that rate. Everyone else uses the guest rate.
+                Completed lessons keep the fee from when they were marked complete. Studio-student
+                lessons use that rate. Everyone else uses the guest rate.
               </p>
               <BarChart points={stats.series} valueKey="floorFeeCents" formatValue={fmtPrice} />
             </div>

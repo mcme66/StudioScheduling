@@ -51,11 +51,6 @@ const skipSchema = z.object({
   date: z.string().refine(isValidDateStr, 'date must be YYYY-MM-DD.'),
 });
 
-const paidSchema = z.object({
-  date: z.string().refine(isValidDateStr, 'date must be YYYY-MM-DD.'),
-  paid: z.boolean(),
-});
-
 function seriesBounds(slot) {
   return {
     seriesStart: slot.series_start_date ? fmtDate(slot.series_start_date) : null,
@@ -516,79 +511,6 @@ recurringRouter.post(
     });
 
     res.json({ ok: true });
-  }),
-);
-
-// Mark a single week of an approved weekly spot as paid/unpaid.
-recurringRouter.patch(
-  '/:id/paid',
-  requireAuth,
-  asyncHandler(async (req, res) => {
-    const id = Number(req.params.id);
-    const { date, paid } = paidSchema.parse(req.body);
-
-    const { rows } = await query(
-      `SELECT ra.id, ra.status, ra.student_id, ra.payment_partner_id, ra.slot_id, s.teacher_id, s.weekday,
-              t.track_payments
-         FROM recurring_assignments ra
-         JOIN slots s ON s.id = ra.slot_id
-         JOIN teachers t ON t.id = s.teacher_id
-        WHERE ra.id = $1`,
-      [id],
-    );
-    const ra = rows[0];
-    if (!ra) throw new HttpError(404, 'Weekly spot not found.');
-    if (!ra.track_payments) {
-      throw new HttpError(403, 'This instructor does not track payments.');
-    }
-
-    const bookerStudentId = await resolveBookerStudentId(req.user).catch(() => null);
-    const isTeacher = await isScheduleTeacher(req, ra.teacher_id);
-    if (req.user.role === 'teacher' && ra.teacher_id === req.user.id) {
-      await assertCoachMayEdit(req);
-    }
-    const isStudent = bookerStudentId != null && ra.student_id === bookerStudentId;
-    const isPaymentPartner =
-      bookerStudentId != null && ra.payment_partner_id === bookerStudentId;
-    if (!isTeacher && !isStudent && !isPaymentPartner) {
-      throw new HttpError(403, 'You cannot update payment for this weekly spot.');
-    }
-    if (ra.status !== 'approved') {
-      throw new HttpError(409, 'This weekly spot is not active.');
-    }
-    if (weekdayOf(date) !== ra.weekday) {
-      throw new HttpError(400, 'That date does not match the lesson day.');
-    }
-
-    const bookerPaid = isTeacher || isStudent ? paid : null;
-    const partnerPaid = isTeacher || (isPaymentPartner && !isStudent) ? paid : null;
-    const { rows: updated } = await query(
-      `INSERT INTO recurring_lesson_payments (recurring_assignment_id, lesson_date, paid, partner_paid)
-       VALUES (
-         $1, $2,
-         COALESCE($3, false),
-         COALESCE($4, false)
-       )
-       ON CONFLICT (recurring_assignment_id, lesson_date)
-       DO UPDATE SET
-         paid = COALESCE($3, recurring_lesson_payments.paid),
-         partner_paid = COALESCE($4, recurring_lesson_payments.partner_paid)
-       RETURNING recurring_assignment_id, lesson_date, paid, partner_paid`,
-      [id, date, bookerPaid, partnerPaid],
-    );
-    const viewerPaid =
-      isPaymentPartner && !isStudent && !isTeacher
-        ? updated[0].partner_paid === true
-        : updated[0].paid === true;
-    res.json({
-      payment: {
-        recurringId: updated[0].recurring_assignment_id,
-        lessonDate: updated[0].lesson_date instanceof Date
-          ? updated[0].lesson_date.toISOString().slice(0, 10)
-          : updated[0].lesson_date,
-        paid: viewerPaid,
-      },
-    });
   }),
 );
 

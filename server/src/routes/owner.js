@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { query } from '../db.js';
+import { query, withTransaction } from '../db.js';
 import { sanitizeRichText } from '../utils/sanitizeHtml.js';
 import {
   assignCoachTier,
@@ -14,14 +14,16 @@ import { asyncHandler, HttpError } from '../middleware/error.js';
 import { requireRole } from '../middleware/auth.js';
 import { addDays, addWeeks, getMonday, isValidDateStr, todayISO, weekdayOf } from '../utils/week.js';
 import {
-  listTaughtLessons,
-  expectedFloorFeeCents,
   weeksOverlappingRange,
   loadStudioStudentIdSet,
-  listRecentStudioStudents,
-  recentStudentRange,
   studentHasLessonAtStudio,
 } from '../utils/taughtLessons.js';
+import {
+  latestCompletedLessonByStudent,
+  listCompletedLessons,
+  listRecentStudioStudents,
+} from '../utils/completedLessons.js';
+import { notifyCoachSettled } from '../services/notifications.js';
 import {
   listRooms,
   listClassSchedules,
@@ -118,32 +120,6 @@ function coachHistoryFrom(today) {
   return `${Number(today.slice(0, 4)) - 5}-01-01`;
 }
 
-async function loadFloorFeeRates(studioId) {
-  const { rows } = await query(
-    `SELECT floor_fee_percent, floor_fee_flat_cents,
-            studio_student_floor_fee_percent, studio_student_floor_fee_cents
-       FROM studios WHERE id = $1`,
-    [studioId],
-  );
-  const studio = rows[0];
-  if (!studio) throw new HttpError(404, 'Studio not found.');
-  return {
-    percent: Number(studio.floor_fee_percent) || 0,
-    flat: Number(studio.floor_fee_flat_cents) || 0,
-    studioStudentPercent: Number(studio.studio_student_floor_fee_percent) || 0,
-    studioStudentFlat: Number(studio.studio_student_floor_fee_cents) || 0,
-  };
-}
-
-function feeForLesson(lesson, studioStudentIds, rates) {
-  const member = studioStudentIds.has(lesson.studentId);
-  return expectedFloorFeeCents(
-    lesson.priceCents,
-    member ? rates.studioStudentPercent : rates.percent,
-    member ? rates.studioStudentFlat : rates.flat,
-  );
-}
-
 const profileSchema = z.object({
   fullName: z.string().min(1).max(120).optional(),
   phone: z.string().max(40).optional().or(z.literal('')),
@@ -222,7 +198,7 @@ async function loadStudioPayload(studioId) {
   if (!studio) throw new HttpError(404, 'Studio not found.');
 
   const { rows: teachers } = await query(
-    `SELECT t.id, t.full_name, t.bio, t.is_active, ts.owner_managed,
+    `SELECT t.id, t.full_name, t.bio, t.is_active, ts.owner_managed, ts.floor_fee_exempt,
             ct.id AS tier_id, ct.name AS tier_name
        FROM teachers t
        JOIN teacher_studios ts ON ts.teacher_id = t.id
@@ -258,6 +234,7 @@ async function loadStudioPayload(studioId) {
       bio: t.bio || null,
       isActive: t.is_active === true,
       ownerManaged: t.owner_managed === true,
+      floorFeeExempt: t.floor_fee_exempt === true,
       tierId: t.tier_id || null,
       tierName: t.tier_name || null,
     })),
@@ -302,7 +279,188 @@ ownerRouter.patch(
       [managed, teacherId, studioId],
     );
     if (!rowCount) throw new HttpError(404, 'That coach is not at your studio.');
+    if (managed) {
+      await query(
+        `UPDATE teachers
+            SET track_payments = true,
+                track_payments_since = COALESCE(track_payments_since, CURRENT_DATE)
+          WHERE id = $1`,
+        [teacherId],
+      );
+    }
     res.json({ ok: true, ownerManaged: managed });
+  }),
+);
+
+ownerRouter.patch(
+  '/teachers/:teacherId/floor-fee-exempt',
+  asyncHandler(async (req, res) => {
+    const teacherId = Number(req.params.teacherId);
+    const { exempt } = z.object({ exempt: z.boolean() }).parse(req.body);
+    if (!Number.isInteger(teacherId) || teacherId <= 0) {
+      throw new HttpError(400, 'Invalid coach.');
+    }
+    const studioId = await ownerStudioId(req.user.id);
+    const { rowCount } = await query(
+      `UPDATE teacher_studios
+          SET floor_fee_exempt = $1
+        WHERE teacher_id = $2 AND studio_id = $3`,
+      [exempt, teacherId, studioId],
+    );
+    if (!rowCount) throw new HttpError(404, 'That coach is not at your studio.');
+    res.json({ ok: true, floorFeeExempt: exempt });
+  }),
+);
+
+ownerRouter.get(
+  '/balances',
+  asyncHandler(async (req, res) => {
+    const studioId = await ownerStudioId(req.user.id);
+    const { rows } = await query(
+      `SELECT t.id, t.full_name, t.is_active, ts.owner_managed,
+              COALESCE(SUM(sc.floor_fee_cents) FILTER (WHERE sc.collected_by = 'coach'), 0)::int
+                AS floor_fees_owed_cents,
+              COALESCE(SUM(sc.amount_cents - sc.floor_fee_cents) FILTER (WHERE sc.collected_by = 'studio'), 0)::int
+                AS payout_owed_cents
+         FROM teacher_studios ts
+         JOIN teachers t ON t.id = ts.teacher_id
+         LEFT JOIN lesson_completions lc
+           ON lc.teacher_id = ts.teacher_id AND lc.studio_id = ts.studio_id
+         LEFT JOIN student_charges sc
+           ON sc.lesson_completion_id = lc.id
+          AND sc.status = 'paid'
+          AND sc.settlement_id IS NULL
+        WHERE ts.studio_id = $1
+        GROUP BY t.id, t.full_name, t.is_active, ts.owner_managed
+        ORDER BY t.full_name`,
+      [studioId],
+    );
+    const coaches = rows
+      .map((r) => ({
+        id: r.id,
+        fullName: r.full_name,
+        isActive: r.is_active === true,
+        ownerManaged: r.owner_managed === true,
+        floorFeesOwedCents: r.floor_fees_owed_cents,
+        payoutOwedCents: r.payout_owed_cents,
+      }))
+      .filter((c) => c.floorFeesOwedCents > 0 || c.payoutOwedCents > 0);
+    res.json({
+      coaches,
+      floorFeesOwedCents: coaches.reduce((n, c) => n + c.floorFeesOwedCents, 0),
+      payoutOwedCents: coaches.reduce((n, c) => n + c.payoutOwedCents, 0),
+    });
+  }),
+);
+
+/**
+ * Paid lessons still waiting on the studio: floor fees a coach owes (coach collected)
+ * and payouts the studio owes (studio collected). One row per lesson and direction.
+ */
+ownerRouter.get(
+  '/settlement-requests',
+  asyncHandler(async (req, res) => {
+    const studioId = await ownerStudioId(req.user.id);
+    const { rows } = await query(
+      `SELECT lc.id AS completion_id, lc.teacher_id, t.full_name AS teacher_name,
+              lc.lesson_date, lc.start_time, lc.duration_min, lc.price_cents, lc.child_name,
+              st.full_name AS student_name, pp.full_name AS partner_name,
+              sc.collected_by,
+              SUM(sc.amount_cents)::int AS paid_cents,
+              SUM(sc.floor_fee_cents)::int AS floor_fee_cents,
+              array_agg(DISTINCT sc.method) AS methods,
+              MAX(sc.paid_at) AS paid_at
+         FROM student_charges sc
+         JOIN lesson_completions lc ON lc.id = sc.lesson_completion_id
+         JOIN teachers t ON t.id = lc.teacher_id
+         JOIN students st ON st.id = lc.student_id
+         LEFT JOIN students pp ON pp.id = lc.payment_partner_id
+        WHERE lc.studio_id = $1
+          AND sc.status = 'paid'
+          AND sc.settlement_id IS NULL
+        GROUP BY lc.id, t.full_name, st.full_name, pp.full_name, sc.collected_by
+        ORDER BY lc.lesson_date, lc.start_time, lc.id`,
+      [studioId],
+    );
+    const mapped = rows.map((r) => ({
+      completionId: r.completion_id,
+      direction: r.collected_by === 'studio' ? 'studio_to_coach' : 'coach_to_studio',
+      teacherId: r.teacher_id,
+      teacherName: r.teacher_name,
+      lessonDate: r.lesson_date instanceof Date ? r.lesson_date.toISOString().slice(0, 10) : r.lesson_date,
+      startTime: fmtTime(r.start_time),
+      durationMin: r.duration_min,
+      priceCents: r.price_cents,
+      studentName: r.student_name,
+      childName: r.child_name || null,
+      paymentPartnerName: r.partner_name || null,
+      paidCents: r.paid_cents,
+      floorFeeCents: r.floor_fee_cents,
+      payoutCents: r.paid_cents - r.floor_fee_cents,
+      methods: (r.methods || []).filter(Boolean),
+      paidAt: r.paid_at,
+    }));
+    res.json({
+      floorFees: mapped.filter((r) => r.direction === 'coach_to_studio'),
+      payouts: mapped.filter((r) => r.direction === 'studio_to_coach'),
+    });
+  }),
+);
+
+/** Settle one lesson: "Floor Fee Received" (coach_to_studio) or "Payout Sent" (studio_to_coach). */
+ownerRouter.post(
+  '/lesson-completions/:id/settle',
+  asyncHandler(async (req, res) => {
+    const completionId = Number(req.params.id);
+    if (!Number.isInteger(completionId) || completionId <= 0) {
+      throw new HttpError(400, 'Invalid lesson.');
+    }
+    const { direction } = z
+      .object({ direction: z.enum(['coach_to_studio', 'studio_to_coach']) })
+      .parse(req.body);
+    const studioId = await ownerStudioId(req.user.id);
+    const collectedBy = direction === 'coach_to_studio' ? 'coach' : 'studio';
+    const result = await withTransaction(async (client) => {
+      const { rows: charges } = await client.query(
+        `SELECT sc.id, sc.amount_cents, sc.floor_fee_cents, lc.teacher_id, lc.lesson_date, lc.start_time
+           FROM student_charges sc
+           JOIN lesson_completions lc ON lc.id = sc.lesson_completion_id
+          WHERE lc.id = $1 AND lc.studio_id = $2
+            AND sc.status = 'paid' AND sc.collected_by = $3 AND sc.settlement_id IS NULL
+          FOR UPDATE OF sc`,
+        [completionId, studioId, collectedBy],
+      );
+      if (!charges.length) throw new HttpError(400, 'Nothing left to settle for this lesson.');
+      const amountCents = charges.reduce(
+        (n, c) => n + (collectedBy === 'coach' ? c.floor_fee_cents : c.amount_cents - c.floor_fee_cents),
+        0,
+      );
+      const { rows } = await client.query(
+        `INSERT INTO studio_settlements (studio_id, teacher_id, direction, amount_cents)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, amount_cents`,
+        [studioId, charges[0].teacher_id, direction, amountCents],
+      );
+      await client.query(
+        'UPDATE student_charges SET settlement_id = $1 WHERE id = ANY($2::int[])',
+        [rows[0].id, charges.map((c) => c.id)],
+      );
+      return { settlement: rows[0], lesson: charges[0] };
+    });
+    await notifyCoachSettled({
+      teacherId: result.lesson.teacher_id,
+      direction,
+      amountCents: result.settlement.amount_cents,
+      lessonDate: result.lesson.lesson_date,
+      startTime: result.lesson.start_time,
+    });
+    res.status(201).json({
+      settlement: {
+        id: result.settlement.id,
+        direction,
+        amountCents: result.settlement.amount_cents,
+      },
+    });
   }),
 );
 
@@ -310,13 +468,19 @@ const coachProfileSchema = z.object({
   bio: z.string().max(1000).optional().or(z.literal('')),
   additionalInfo: z.string().max(15000).optional().or(z.literal('')),
   teachingPolicies: z.string().max(15000).optional().or(z.literal('')),
+  defaultPriceCents: z.number().int().min(0).max(10_000_000).optional(),
+  defaultDurationMin: z.number().int().min(5).max(240).optional(),
 });
+
+const COACH_PROFILE_COLUMNS = 'bio, additional_info, teaching_policies, default_price_cents, default_duration_min';
 
 function mapCoachProfile(row) {
   return {
     bio: row.bio || null,
     additionalInfo: row.additional_info || null,
     teachingPolicies: row.teaching_policies || null,
+    defaultPriceCents: row.default_price_cents,
+    defaultDurationMin: row.default_duration_min,
   };
 }
 
@@ -341,10 +505,9 @@ ownerRouter.get(
   '/teachers/:teacherId/profile',
   asyncHandler(async (req, res) => {
     const teacherId = await managedCoachId(req);
-    const { rows } = await query(
-      'SELECT bio, additional_info, teaching_policies FROM teachers WHERE id = $1',
-      [teacherId],
-    );
+    const { rows } = await query(`SELECT ${COACH_PROFILE_COLUMNS} FROM teachers WHERE id = $1`, [
+      teacherId,
+    ]);
     res.json({ profile: mapCoachProfile(rows[0]) });
   }),
 );
@@ -354,13 +517,20 @@ ownerRouter.patch(
   asyncHandler(async (req, res) => {
     const teacherId = await managedCoachId(req);
     const data = coachProfileSchema.parse(req.body);
-    const columns = { bio: 'bio', additionalInfo: 'additional_info', teachingPolicies: 'teaching_policies' };
+    const columns = {
+      bio: 'bio',
+      additionalInfo: 'additional_info',
+      teachingPolicies: 'teaching_policies',
+      defaultPriceCents: 'default_price_cents',
+      defaultDurationMin: 'default_duration_min',
+    };
+    const richTextKeys = new Set(['additionalInfo', 'teachingPolicies']);
     const sets = [];
     const values = [];
     for (const [key, column] of Object.entries(columns)) {
       if (data[key] === undefined) continue;
       let value = data[key] === '' ? null : data[key];
-      if (key !== 'bio' && value != null) value = sanitizeRichText(value);
+      if (richTextKeys.has(key) && value != null) value = sanitizeRichText(value);
       values.push(value);
       sets.push(`${column} = $${values.length}`);
     }
@@ -368,7 +538,7 @@ ownerRouter.patch(
     values.push(teacherId);
     const { rows } = await query(
       `UPDATE teachers SET ${sets.join(', ')} WHERE id = $${values.length}
-       RETURNING bio, additional_info, teaching_policies`,
+       RETURNING ${COACH_PROFILE_COLUMNS}`,
       values,
     );
     res.json({ profile: mapCoachProfile(rows[0]) });
@@ -497,20 +667,13 @@ ownerRouter.get(
     const preset = coachPresetSchema.default('week').parse(req.query.preset);
     const window = coachWindow(preset);
     const historyFrom = coachHistoryFrom(window.to);
-    const payload = await loadStudioPayload(studioId);
-    const rates = {
-      percent: payload.studio.floorFeePercent,
-      flat: payload.studio.floorFeeFlatCents,
-      studioStudentPercent: payload.studio.studioStudentFloorFeePercent,
-      studioStudentFlat: payload.studio.studioStudentFloorFeeCents,
-    };
-    const [lessons, studioStudentIds] = await Promise.all([
-      listTaughtLessons({
+    const [payload, { lessons }] = await Promise.all([
+      loadStudioPayload(studioId),
+      listCompletedLessons({
         studioId,
         from: historyFrom < window.from ? historyFrom : window.from,
         to: window.to,
       }),
-      loadStudioStudentIdSet(studioId),
     ]);
 
     const coaches = new Map(
@@ -521,6 +684,7 @@ ownerRouter.get(
           fullName: t.fullName,
           isActive: t.isActive,
           ownerManaged: t.ownerManaged === true,
+          floorFeeExempt: t.floorFeeExempt === true,
           tierId: t.tierId || null,
           tierName: t.tierName || null,
           lessonCount: 0,
@@ -538,7 +702,7 @@ ownerRouter.get(
       }
       if (lesson.lessonDate < window.from) continue;
       coach.lessonCount += 1;
-      coach.floorFeeCents += feeForLesson(lesson, studioStudentIds, rates);
+      coach.floorFeeCents += lesson.floorFeeCents;
     }
 
     res.json({
@@ -591,22 +755,17 @@ ownerRouter.get(
     const teacher = teacherRows[0];
     if (!teacher) throw new HttpError(404, 'Instructor not found.');
 
-    const [lessons, studioStudentIds, rates] = await Promise.all([
-      listTaughtLessons({ studioId, teacherId, from, to }),
-      loadStudioStudentIdSet(studioId),
-      loadFloorFeeRates(studioId),
-    ]);
+    const { lessons, awaitingCount } = await listCompletedLessons({ studioId, teacherId, from, to });
     let floorFeeCents = 0;
     const mapped = lessons.map((r) => {
-      const fee = feeForLesson(r, studioStudentIds, rates);
-      floorFeeCents += fee;
+      floorFeeCents += r.floorFeeCents;
       return {
         lessonDate: r.lessonDate,
         weekday: weekdayOf(r.lessonDate),
         startTime: r.startTime,
         durationMin: r.durationMin,
         priceCents: r.priceCents,
-        floorFeeCents: fee,
+        floorFeeCents: r.floorFeeCents,
         kind: r.kind,
         student: {
           name: r.studentName,
@@ -627,6 +786,7 @@ ownerRouter.get(
       to,
       lessonCount: mapped.length,
       floorFeeCents,
+      awaitingCount,
       lessons: mapped,
     });
   }),
@@ -691,8 +851,7 @@ ownerRouter.get(
     const flatCents = payload.studio.floorFeeFlatCents;
     const studioStudentPercent = payload.studio.studioStudentFloorFeePercent;
     const studioStudentFlatCents = payload.studio.studioStudentFloorFeeCents;
-    const lessons = await listTaughtLessons({ studioId, from, to });
-    const studioStudentIds = await loadStudioStudentIdSet(studioId);
+    const { lessons, awaitingCount } = await listCompletedLessons({ studioId, from, to });
 
     const byTeacher = new Map(
       payload.teachers.map((t) => [
@@ -701,6 +860,7 @@ ownerRouter.get(
           id: t.id,
           fullName: t.fullName,
           isActive: t.isActive,
+          floorFeeExempt: t.floorFeeExempt,
           lessonCount: 0,
           revenueCents: 0,
           floorFeeCents: 0,
@@ -719,9 +879,7 @@ ownerRouter.get(
     }));
 
     for (const lesson of lessons) {
-      const fee = studioStudentIds.has(lesson.studentId)
-        ? expectedFloorFeeCents(lesson.priceCents, studioStudentPercent, studioStudentFlatCents)
-        : expectedFloorFeeCents(lesson.priceCents, percent, flatCents);
+      const fee = lesson.floorFeeCents;
       const coach = byTeacher.get(lesson.teacherId);
       if (coach) {
         coach.lessonCount += 1;
@@ -748,6 +906,7 @@ ownerRouter.get(
       studioStudentFloorFeePercent: studioStudentPercent,
       studioStudentFloorFeeCents: studioStudentFlatCents,
       studioTotalCents: coaches.reduce((sum, c) => sum + c.floorFeeCents, 0),
+      awaitingCount,
       coaches,
       weeks: weekBuckets.map((w) => ({
         from: w.from,
@@ -828,15 +987,10 @@ ownerRouter.get(
     const studioId = await ownerStudioId(req.user.id);
     const { preset } = dashboardQuerySchema.parse(req.query);
     const window = dashboardWindow(preset);
-    const payload = await loadStudioPayload(studioId);
-    const lessons = await listTaughtLessons({ studioId, from: window.from, to: window.to });
-    const studioStudentIds = await loadStudioStudentIdSet(studioId);
-    const rates = {
-      percent: payload.studio.floorFeePercent,
-      flat: payload.studio.floorFeeFlatCents,
-      memberPercent: payload.studio.studioStudentFloorFeePercent,
-      memberFlat: payload.studio.studioStudentFloorFeeCents,
-    };
+    const [{ lessons, awaitingCount }, studioStudentIds] = await Promise.all([
+      listCompletedLessons({ studioId, from: window.from, to: window.to }),
+      loadStudioStudentIdSet(studioId),
+    ]);
 
     const keys = seriesKeys(window.from, window.to, window.bucket);
     const seriesMap = new Map(
@@ -854,9 +1008,7 @@ ownerRouter.get(
 
     for (const lesson of lessons) {
       const isMember = studioStudentIds.has(lesson.studentId);
-      const fee = isMember
-        ? expectedFloorFeeCents(lesson.priceCents, rates.memberPercent, rates.memberFlat)
-        : expectedFloorFeeCents(lesson.priceCents, rates.percent, rates.flat);
+      const fee = lesson.floorFeeCents;
       floorFeeCents += fee;
       revenueCents += lesson.priceCents;
       if (isMember) studioStudentLessons += 1;
@@ -882,6 +1034,7 @@ ownerRouter.get(
       floorFeeCents,
       revenueCents,
       coachesTeaching: coaches.size,
+      awaitingCount,
       series: [...seriesMap.values()],
     });
   }),
@@ -907,13 +1060,7 @@ ownerRouter.get(
         ORDER BY s.full_name`,
       [studioId],
     );
-    const { from, to } = recentStudentRange();
-    const lessons = await listTaughtLessons({ studioId, from, to });
-    const latest = new Map();
-    for (const lesson of lessons) {
-      const prev = latest.get(lesson.studentId);
-      if (!prev || lesson.lessonDate > prev.lessonDate) latest.set(lesson.studentId, lesson);
-    }
+    const latest = await latestCompletedLessonByStudent(studioId);
     res.json({
       students: rows.map((r) => {
         const last = latest.get(r.id);

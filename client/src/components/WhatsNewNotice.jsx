@@ -22,36 +22,28 @@ export default function WhatsNewNotice() {
   if (!open) return null;
 
   return (
-    <Modal title="What’s new" subtitle="Lesson updates now come to you." onClose={dismiss}>
+    <Modal title="What’s new" subtitle="Track and pay for your lessons in one place." onClose={dismiss}>
       <div className="whats-new-body">
         <ul className="whats-new-list">
           <li>
-            <strong>A new notification bell.</strong> Look for the bell at the top right, next to
-            Log out. A red number shows how many updates you haven’t read yet.
-          </li>
-          <li>
-            <strong>Weekly spot answers.</strong> Find out when your instructor accepts or declines
-            a weekly spot, or books a single lesson instead.
-          </li>
-          <li>
-            <strong>Cancellations and changes.</strong> Hear right away if your instructor or studio
-            cancels a lesson, or if a different instructor will teach it.
-          </li>
-          <li>
-            <strong>Lessons held for you.</strong> When an instructor holds a time for you, the bell
-            lets you know so you can accept or decline it on{' '}
-            <Link to="/my-lessons" onClick={dismiss}>
-              My lessons
+            <strong>A new Payments tab.</strong> After your coach marks a lesson complete, the
+            charge shows up under{' '}
+            <Link to="/my-lessons?tab=payments" onClick={dismiss}>
+              My lessons → Payments
             </Link>
-            .
+            , along with your balance due.
           </li>
           <li>
-            <strong>Back on the schedule.</strong> If a cancellation is undone, the old notice
-            disappears and you’ll see that your lesson is back on.
+            <strong>Tell us how you paid.</strong> Tap <em>I paid</em> and choose cash or Venmo. Your
+            coach will confirm it and reach out if they can’t find it.
           </li>
           <li>
-            <strong>Tidy by itself.</strong> Tap a notification to open it, or use{' '}
-            <em>Mark all read</em>. Read notifications clear after 15 days, unread ones after 45.
+            <strong>Split lessons.</strong> If you share a lesson with a partner, you’re each charged
+            half.
+          </li>
+          <li>
+            <strong>Updates in the bell.</strong> You’ll get a notification for new charges and when
+            your payment is confirmed.
           </li>
         </ul>
       </div>

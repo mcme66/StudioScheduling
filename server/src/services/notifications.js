@@ -502,3 +502,158 @@ export function notifyStudentCoachFilled({
     });
   });
 }
+
+// --- Payments --------------------------------------------------------------
+
+const PAYMENTS_LINK_STUDENT = '/my-lessons?tab=payments';
+const METHOD_LABEL = { cash: 'cash', venmo: 'Venmo', card: 'card' };
+
+function money(cents) {
+  const n = (Number(cents) || 0) / 100;
+  return `$${n.toFixed(2).replace(/\.00$/, '')}`;
+}
+
+/** charges: [{ studentId, amountCents }] for one completed lesson. */
+export function notifyStudentsCharged({ charges, teacherId, childName, lessonDate, startTime }) {
+  return safely(async () => {
+    const list = (charges || []).filter((c) => c?.studentId);
+    if (!list.length) return;
+    const coach = (await teacherName(teacherId)) || 'Your coach';
+    const forLine = childName ? ` for ${childName}` : '';
+    await notifyMany(
+      list.map((c) => ({
+        role: 'student',
+        id: c.studentId,
+        kind: 'charge_added',
+        title: `New charge: ${money(c.amountCents)}`,
+        body: `${coach} marked your lesson${forLine} on ${lessonWhen({ lessonDate, startTime })} complete.`,
+        link: PAYMENTS_LINK_STUDENT,
+      })),
+    );
+  });
+}
+
+export const chargeRef = (chargeId) => `charge:${chargeId}`;
+
+/** Removes the "Payment to confirm" notice when a student undoes their report. */
+export function retractPaymentReported(chargeId) {
+  return safely(async () => {
+    await query(`DELETE FROM notifications WHERE ref = $1 AND kind = 'payment_reported'`, [
+      chargeRef(chargeId),
+    ]);
+  });
+}
+
+/** Goes to the coach, or to the studio owner when the studio manages the coach. */
+export function notifyPaymentReported({
+  chargeId,
+  teacherId,
+  managed,
+  studentId,
+  childName,
+  amountCents,
+  method,
+  lessonDate,
+  startTime,
+}) {
+  return safely(async () => {
+    const who = personLabel(await studentName(studentId), childName);
+    const body = `${who} says they paid ${money(amountCents)} by ${METHOD_LABEL[method] || method} for ${lessonWhen({ lessonDate, startTime })}.`;
+    const ref = chargeRef(chargeId);
+    if (!managed) {
+      await notify({
+        role: 'teacher',
+        id: teacherId,
+        kind: 'payment_reported',
+        title: 'Payment to confirm',
+        body,
+        link: '/teacher?tab=payments',
+        ref,
+      });
+      return;
+    }
+    const { rows: owners } = await query(
+      `SELECT so.id
+         FROM studio_owners so
+         JOIN teacher_studios ts ON ts.studio_id = so.studio_id
+        WHERE ts.teacher_id = $1 AND ts.owner_managed = true`,
+      [teacherId],
+    );
+    await notifyMany(
+      owners.map((o) => ({
+        role: 'studio_owner',
+        id: o.id,
+        kind: 'payment_reported',
+        title: 'Payment to confirm',
+        body,
+        link: `/owner/coaches/${teacherId}/schedule?tab=payments`,
+        ref,
+      })),
+    );
+  });
+}
+
+export function notifyStudentPaymentConfirmed({
+  studentId,
+  teacherId,
+  amountCents,
+  lessonDate,
+  startTime,
+  byStudio = false,
+}) {
+  return safely(async () => {
+    const coach = (await teacherName(teacherId)) || 'Your coach';
+    const actor = byStudio ? 'The studio' : coach;
+    const withCoach = byStudio ? ` with ${coach}` : '';
+    await notify({
+      role: 'student',
+      id: studentId,
+      kind: 'payment_confirmed',
+      title: 'Payment confirmed',
+      body: `${actor} confirmed your ${money(amountCents)} payment for your lesson${withCoach} on ${lessonWhen({ lessonDate, startTime })}.`,
+      link: PAYMENTS_LINK_STUDENT,
+    });
+  });
+}
+
+/** direction: 'coach_to_studio' (floor fee received) or 'studio_to_coach' (payout sent). */
+export function notifyCoachSettled({ teacherId, direction, amountCents, lessonDate, startTime }) {
+  return safely(async () => {
+    const when = lessonWhen({ lessonDate: fmtDate(lessonDate), startTime });
+    const floorFee = direction === 'coach_to_studio';
+    await notify({
+      role: 'teacher',
+      id: teacherId,
+      kind: floorFee ? 'floor_fee_received' : 'payout_sent',
+      title: floorFee ? 'Floor fee received' : 'Payout sent',
+      body: floorFee
+        ? `The studio received your ${money(amountCents)} floor fee for ${when}.`
+        : `The studio sent your ${money(amountCents)} payout for ${when}.`,
+      link: floorFee ? '/teacher?tab=payments' : '/teacher',
+    });
+  });
+}
+
+export function notifyStudentPaymentNotFound({
+  studentId,
+  teacherId,
+  amountCents,
+  method,
+  lessonDate,
+  startTime,
+  byStudio = false,
+}) {
+  return safely(async () => {
+    const coach = (await teacherName(teacherId)) || 'Your coach';
+    const actor = byStudio ? 'The studio' : coach;
+    const via = method ? ` ${METHOD_LABEL[method] || method}` : '';
+    await notify({
+      role: 'student',
+      id: studentId,
+      kind: 'payment_not_found',
+      title: 'Payment not found',
+      body: `${actor} couldn’t find your ${money(amountCents)}${via} payment for ${lessonWhen({ lessonDate, startTime })}. They’ll reach out.`,
+      link: PAYMENTS_LINK_STUDENT,
+    });
+  });
+}

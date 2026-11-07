@@ -105,9 +105,13 @@ teachersRouter.put(
         'SELECT 1 FROM teacher_studios WHERE teacher_id = $1 AND studio_id = $2',
         [req.user.id, studioId],
       );
-      await client.query('DELETE FROM teacher_studios WHERE teacher_id = $1', [req.user.id]);
+      await client.query('DELETE FROM teacher_studios WHERE teacher_id = $1 AND studio_id <> $2', [
+        req.user.id,
+        studioId,
+      ]);
       await client.query(
-        'INSERT INTO teacher_studios (teacher_id, studio_id) VALUES ($1, $2)',
+        `INSERT INTO teacher_studios (teacher_id, studio_id) VALUES ($1, $2)
+         ON CONFLICT DO NOTHING`,
         [req.user.id, studioId],
       );
       return !before[0];
@@ -151,6 +155,10 @@ teachersRouter.patch(
   asyncHandler(async (req, res) => {
     const data = profileSchema.parse(req.body);
     await stripStudioManagedFields(req.user.id, data);
+    const studioControlled = ['trackPayments', 'defaultPriceCents', 'defaultDurationMin'];
+    if (studioControlled.some((key) => data[key] !== undefined) && (await isOwnerManaged(req.user.id))) {
+      for (const key of studioControlled) delete data[key];
+    }
     const map = {
       fullName: 'full_name',
       phone: 'phone',
@@ -177,6 +185,9 @@ teachersRouter.patch(
         }
         values.push(val);
       }
+    }
+    if (data.trackPayments === true) {
+      fields.push('track_payments_since = COALESCE(track_payments_since, CURRENT_DATE)');
     }
     if (!fields.length) throw new HttpError(400, 'Nothing to update.');
     values.push(req.user.id);
@@ -222,7 +233,7 @@ teachersRouter.get(
     }
 
     const { rows: bookings } = await query(
-      `SELECT b.id, b.lesson_date, b.created_at, b.status, b.cancelled_by, b.paid, b.partner_paid, b.slot_id, b.child_name,
+      `SELECT b.id, b.lesson_date, b.created_at, b.status, b.cancelled_by, b.slot_id, b.child_name,
               b.payment_partner_id, pp.full_name AS payment_partner_name,
               s.weekday, s.start_time, s.duration_min, s.price_cents,
               st.full_name AS student_name, st.email AS student_email, st.phone AS student_phone
@@ -279,36 +290,17 @@ teachersRouter.get(
       [teacherId],
     );
 
-    let recurringPayments = new Map();
-    if (weekRange && recurring.length) {
-      const recurringIds = recurring.map((r) => r.id);
-      const { rows: payRows } = await query(
-        `SELECT recurring_assignment_id, lesson_date, paid, partner_paid
-           FROM recurring_lesson_payments
-          WHERE recurring_assignment_id = ANY($1::int[])
-            AND lesson_date BETWEEN $2 AND $3`,
-        [recurringIds, weekRange.monday, weekRange.sunday],
-      );
-      for (const p of payRows) {
-        recurringPayments.set(`${p.recurring_assignment_id}:${fmtDate(p.lesson_date)}`, {
-          paid: p.paid === true,
-          partnerPaid: p.partner_paid === true,
-        });
-      }
-    }
-
     const { rows: teacherRows } = await query(
       'SELECT track_payments FROM teachers WHERE id = $1',
       [teacherId],
     );
-    const trackPayments = teacherRows[0]?.track_payments === true;
     const [ownerManaged, cancellationRequests] = await Promise.all([
       isOwnerManaged(teacherId),
       listPendingCancellationRequests(teacherId),
     ]);
 
     res.json({
-      trackPayments,
+      paymentsEnabled: teacherRows[0]?.track_payments === true || ownerManaged,
       ownerManaged,
       cancellationRequests,
       exceptions,
@@ -321,8 +313,6 @@ teachersRouter.get(
         startTime: fmtTime(b.start_time),
         durationMin: b.duration_min,
         priceCents: b.price_cents,
-        paid: b.paid === true,
-        partnerPaid: b.partner_paid === true,
         paymentPartner: b.payment_partner_name ? { name: b.payment_partner_name } : null,
         status: b.status,
         cancelledBy: b.cancelled_by || null,
@@ -344,9 +334,6 @@ teachersRouter.get(
         } else if (seriesEnd && seriesEnd < todayISO()) {
           return [];
         }
-        const pay = lessonDate
-          ? recurringPayments.get(`${r.id}:${lessonDate}`)
-          : null;
         return [{
           id: r.id,
           slotId: r.slot_id,
@@ -354,8 +341,6 @@ teachersRouter.get(
           startTime: fmtTime(r.start_time),
           durationMin: r.duration_min,
           lessonDate,
-          paid: pay?.paid === true,
-          partnerPaid: pay?.partnerPaid === true,
           paymentPartner: r.payment_partner_name ? { name: r.payment_partner_name } : null,
           student: {
             name: r.student_name,
