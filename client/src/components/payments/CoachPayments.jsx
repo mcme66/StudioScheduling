@@ -65,12 +65,93 @@ function ChargeStatus({ charge }) {
   return <span className="pill pill-due">Due</span>;
 }
 
+function parseChargeDollars(raw) {
+  const trimmed = String(raw ?? '').trim().replace(/^\$/, '');
+  if (!trimmed) return { error: 'Enter an amount.' };
+  const dollars = Number(trimmed);
+  if (!Number.isFinite(dollars)) return { error: 'Enter a valid amount.' };
+  const priceCents = Math.round(dollars * 100);
+  if (priceCents === 0) {
+    return { error: 'Use No charge for a $0 lesson.' };
+  }
+  if (priceCents < 0) return { error: 'Enter an amount greater than $0.' };
+  return { priceCents };
+}
+
+function CustomChargeModal({ item, busy, onClose, onConfirm }) {
+  const [amount, setAmount] = useState('');
+  const [error, setError] = useState('');
+  const parsed = parseChargeDollars(amount);
+
+  return (
+    <Modal
+      title="What do you want to charge for this lesson?"
+      subtitle={`${lessonName(item)} · ${fmtDate(item.lessonDate)} · usual ${fmtPrice(item.priceCents)}`}
+      onClose={onClose}
+    >
+      <div className="field" style={{ marginBottom: '0.75rem' }}>
+        <label htmlFor="custom-charge-amount">Amount ($)</label>
+        <input
+          id="custom-charge-amount"
+          type="number"
+          min="0.01"
+          step="0.01"
+          inputMode="decimal"
+          autoFocus
+          value={amount}
+          disabled={busy}
+          onChange={(e) => {
+            setAmount(e.target.value);
+            setError('');
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              if (parsed.error) {
+                setError(parsed.error);
+                return;
+              }
+              onConfirm(parsed.priceCents);
+            }
+          }}
+        />
+        {item.paymentPartnerName && (
+          <p className="muted" style={{ fontSize: '12px', marginTop: '0.35rem' }}>
+            Split 50/50 with {item.paymentPartnerName}.
+          </p>
+        )}
+        {error && <p className="error-text" style={{ marginTop: '0.35rem' }}>{error}</p>}
+      </div>
+      <div className="modal-actions-half">
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={busy}
+          onClick={() => {
+            if (parsed.error) {
+              setError(parsed.error);
+              return;
+            }
+            onConfirm(parsed.priceCents);
+          }}
+        >
+          Confirm Amount
+        </button>
+        <button type="button" className="btn btn-ghost" disabled={busy} onClick={onClose}>
+          Cancel
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 export default function CoachPayments({ ownerTeacher = null }) {
   const toast = useToast();
   const queryClient = useQueryClient();
   const scope = ownerTeacher ? ownerTeacher.id : 'self';
   const [filter, setFilter] = useState('open');
   const [payTarget, setPayTarget] = useState(null);
+  const [customTarget, setCustomTarget] = useState(null);
   const paymentsQuery = useCoachPayments(ownerTeacher);
   const withTeacher = (path) => (ownerTeacher ? `${path}?teacherId=${ownerTeacher.id}` : path);
 
@@ -105,8 +186,13 @@ export default function CoachPayments({ ownerTeacher = null }) {
       : { recurringAssignmentId: item.recurringAssignmentId, date: item.lessonDate };
 
   const complete = useAction(
-    (item) => api(withTeacher('/payments/coach/complete'), { method: 'POST', body: lessonRef(item) }),
-    (item) => `Lesson complete. ${lessonName(item)} was charged ${fmtPrice(item.priceCents)}.`,
+    ({ item, priceCents }) =>
+      api(withTeacher('/payments/coach/complete'), {
+        method: 'POST',
+        body: priceCents != null ? { ...lessonRef(item), priceCents } : lessonRef(item),
+      }),
+    ({ item, priceCents }) =>
+      `Lesson complete. ${lessonName(item)} was charged ${fmtPrice(priceCents ?? item.priceCents)}.`,
   );
   const skip = useAction(
     (item) => api(withTeacher('/payments/coach/skip'), { method: 'POST', body: lessonRef(item) }),
@@ -207,9 +293,17 @@ export default function CoachPayments({ ownerTeacher = null }) {
                     type="button"
                     className="btn btn-green btn-sm"
                     disabled={busy}
-                    onClick={() => complete.mutate(item)}
+                    onClick={() => complete.mutate({ item })}
                   >
                     Lesson complete
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    disabled={busy}
+                    onClick={() => setCustomTarget(item)}
+                  >
+                    Custom charge
                   </button>
                   <button
                     type="button"
@@ -356,6 +450,20 @@ export default function CoachPayments({ ownerTeacher = null }) {
             />
           ))}
         </Modal>
+      )}
+
+      {customTarget && (
+        <CustomChargeModal
+          item={customTarget}
+          busy={busy}
+          onClose={() => setCustomTarget(null)}
+          onConfirm={(priceCents) => {
+            complete.mutate(
+              { item: customTarget, priceCents },
+              { onSuccess: () => setCustomTarget(null) },
+            );
+          }}
+        />
       )}
     </>
   );

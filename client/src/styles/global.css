@@ -739,6 +739,17 @@ a:hover {
 .modal-option.danger .modal-option-label {
   color: var(--danger);
 }
+.modal-actions-half {
+  display: flex;
+  gap: 0.5rem;
+  width: 50%;
+  margin-left: auto;
+}
+.modal-actions-half .btn {
+  flex: 1;
+  padding: 5px 10px;
+  font-size: 12px;
+}
 .whats-new-body {
   font-size: 14px;
   line-height: 1.45;

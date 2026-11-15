@@ -318,31 +318,52 @@ async function insertCompletion(client, ctx, lesson, { status, floorFeeCents, ro
   return rows[0].id;
 }
 
+const completeBodySchema = lessonRefSchema.and(
+  z.object({
+    priceCents: z.number().int().optional(),
+  }),
+);
+
 paymentsRouter.post(
   '/coach/complete',
   requireAuth,
   asyncHandler(async (req, res) => {
     const ctx = await resolveCoach(req);
-    const lesson = await findLesson(ctx, lessonRefSchema.parse(req.body));
+    const body = completeBodySchema.parse(req.body);
+    const lesson = await findLesson(ctx, body);
+    if (body.priceCents !== undefined) {
+      if (body.priceCents === 0) {
+        throw new HttpError(400, 'Use No charge for a $0 lesson.');
+      }
+      if (body.priceCents < 0) {
+        throw new HttpError(400, 'Enter an amount greater than $0.');
+      }
+    }
+    const priceCents = body.priceCents ?? lesson.priceCents;
+    const chargedLesson = { ...lesson, priceCents };
     const [rates, studioStudentIds] = await Promise.all([
       loadFloorFeeRates(ctx.studioId),
       loadStudioStudentIdSet(ctx.studioId),
     ]);
-    const floorFeeCents = feeForLesson(lesson, studioStudentIds, rates);
+    const floorFeeCents = feeForLesson(chargedLesson, studioStudentIds, rates);
 
-    const payers = lesson.paymentPartnerId
+    const payers = chargedLesson.paymentPartnerId
       ? (() => {
-          const [bookerAmount, partnerAmount] = splitCents(lesson.priceCents);
+          const [bookerAmount, partnerAmount] = splitCents(priceCents);
           const [bookerFee, partnerFee] = splitCents(floorFeeCents);
           return [
-            { studentId: lesson.studentId, amountCents: bookerAmount, floorFeeCents: bookerFee },
-            { studentId: lesson.paymentPartnerId, amountCents: partnerAmount, floorFeeCents: partnerFee },
+            { studentId: chargedLesson.studentId, amountCents: bookerAmount, floorFeeCents: bookerFee },
+            {
+              studentId: chargedLesson.paymentPartnerId,
+              amountCents: partnerAmount,
+              floorFeeCents: partnerFee,
+            },
           ];
         })()
-      : [{ studentId: lesson.studentId, amountCents: lesson.priceCents, floorFeeCents }];
+      : [{ studentId: chargedLesson.studentId, amountCents: priceCents, floorFeeCents }];
 
     const completionId = await withTransaction(async (client) => {
-      const id = await insertCompletion(client, ctx, lesson, {
+      const id = await insertCompletion(client, ctx, chargedLesson, {
         status: 'charged',
         floorFeeCents,
         role: req.user.role,
@@ -360,9 +381,9 @@ paymentsRouter.post(
     await notifyStudentsCharged({
       charges: payers,
       teacherId: ctx.teacherId,
-      childName: lesson.childName,
-      lessonDate: lesson.lessonDate,
-      startTime: lesson.startTime,
+      childName: chargedLesson.childName,
+      lessonDate: chargedLesson.lessonDate,
+      startTime: chargedLesson.startTime,
     });
     res.status(201).json({ completion: { id: completionId } });
   }),
