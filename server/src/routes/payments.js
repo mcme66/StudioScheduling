@@ -450,12 +450,26 @@ paymentsRouter.post(
       if (row.status === 'paid') throw new HttpError(400, 'This charge is already paid.');
       const method = body.method || row.method;
       if (!method) throw new HttpError(400, 'Choose cash or Venmo.');
+      const collectedBy = ctx.managed ? 'studio' : 'coach';
       await client.query(
         `UPDATE student_charges
             SET status = 'paid', method = $1, paid_at = now(), collected_by = $2
           WHERE id = $3`,
-        [method, ctx.managed ? 'studio' : 'coach', id],
+        [method, collectedBy, id],
       );
+      // Coach-collected $0 floor fees (exempt / zero rates) need no owner action — settle now.
+      if (collectedBy === 'coach' && Number(row.floor_fee_cents) === 0) {
+        const { rows: sett } = await client.query(
+          `INSERT INTO studio_settlements (studio_id, teacher_id, direction, amount_cents)
+           VALUES ($1, $2, 'coach_to_studio', 0)
+           RETURNING id`,
+          [ctx.studioId, ctx.teacherId],
+        );
+        await client.query('UPDATE student_charges SET settlement_id = $1 WHERE id = $2', [
+          sett[0].id,
+          id,
+        ]);
+      }
       return row;
     });
     await notifyStudentPaymentConfirmed({

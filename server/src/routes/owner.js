@@ -401,7 +401,9 @@ ownerRouter.get(
       paidAt: r.paid_at,
     }));
     res.json({
-      floorFees: mapped.filter((r) => r.direction === 'coach_to_studio'),
+      // $0 fees (exempt coaches, zero rates) need no owner action; skip them.
+      // No-charge lessons never create student_charges, so they never appear here.
+      floorFees: mapped.filter((r) => r.direction === 'coach_to_studio' && r.floorFeeCents > 0),
       payouts: mapped.filter((r) => r.direction === 'studio_to_coach'),
     });
   }),
