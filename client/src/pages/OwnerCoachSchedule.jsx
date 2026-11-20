@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
 import ScheduleInfoPanel from '../components/ScheduleInfoPanel.jsx';
+import ManagedLabel from '../components/ManagedLabel.jsx';
 import TeacherDashboard from './TeacherDashboard.jsx';
 
 function BioCard({ teacherId, bio, onSaved }) {
@@ -121,7 +122,12 @@ export default function OwnerCoachSchedule() {
         <p style={{ marginTop: 0 }}>
           <Link to="/owner">← Studio</Link>
         </p>
-        <h1 className="page-title">{teacher.fullName}</h1>
+        <h1 className="page-title">
+          {teacher.fullName}
+          <ManagedLabel
+            show={studioQuery.data?.studio?.showManagedLabel && teacher.ownerManaged}
+          />
+        </h1>
         <p className="page-sub">Turn on Manage for this coach before editing their schedule.</p>
       </div>
     );

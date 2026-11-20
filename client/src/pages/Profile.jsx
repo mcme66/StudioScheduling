@@ -38,6 +38,11 @@ export default function Profile() {
     queryFn: () => api('/teachers/me/studios'),
     enabled: isTeacher,
   });
+  const ownerStudioQuery = useQuery({
+    queryKey: ['owner-studio'],
+    queryFn: () => api('/owner/studio'),
+    enabled: isOwner,
+  });
 
   const [form, setForm] = useState({
     fullName: '',
@@ -54,6 +59,7 @@ export default function Profile() {
     defaultDurationMin: '45',
     studioId: '',
     homeStudioId: '',
+    showManagedLabel: false,
   });
   const [error, setError] = useState('');
 
@@ -77,6 +83,7 @@ export default function Profile() {
         defaultDurationMin: String(t.defaultDurationMin || 45),
         studioId: studio ? String(studio.id) : '',
         homeStudioId: attended?.homeStudioId ? String(attended.homeStudioId) : '',
+        showManagedLabel: false,
       });
     } else if (isStudent && studentQuery.data?.student) {
       const s = studentQuery.data.student;
@@ -99,9 +106,19 @@ export default function Profile() {
         ...f,
         fullName: user.fullName || '',
         phone: user.phone || '',
+        showManagedLabel: ownerStudioQuery.data?.studio?.showManagedLabel === true,
       }));
     }
-  }, [isTeacher, isStudent, isOwner, user, teacherQuery.data, studentQuery.data, myStudiosQuery.data]);
+  }, [
+    isTeacher,
+    isStudent,
+    isOwner,
+    user,
+    teacherQuery.data,
+    studentQuery.data,
+    myStudiosQuery.data,
+    ownerStudioQuery.data,
+  ]);
 
   const save = useMutation({
     mutationFn: async () => {
@@ -152,6 +169,10 @@ export default function Profile() {
             phone: form.phone || '',
           },
         });
+        await api('/owner/studio', {
+          method: 'PATCH',
+          body: { showManagedLabel: form.showManagedLabel === true },
+        });
       } else {
         await api('/students/me', {
           method: 'PATCH',
@@ -188,6 +209,10 @@ export default function Profile() {
         await myStudiosQuery.refetch();
       } else if (isStudent) {
         await studentQuery.refetch();
+      } else if (isOwner) {
+        queryClient.invalidateQueries({ queryKey: ['owner-studio'] });
+        const slug = ownerStudioQuery.data?.studio?.slug;
+        if (slug) queryClient.invalidateQueries({ queryKey: ['studio', slug] });
       }
       navigate(isTeacher ? '/teacher' : isOwner ? '/owner' : '/');
     },
@@ -203,7 +228,9 @@ export default function Profile() {
       (user?.canBookAsStudent === true && studentQuery.isLoading)
     : isStudent
       ? studentQuery.isLoading || studiosQuery.isLoading
-      : false;
+      : isOwner
+        ? ownerStudioQuery.isLoading
+        : false;
 
   const update = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
 
@@ -242,13 +269,36 @@ export default function Profile() {
           </div>
 
           {isOwner && (
-            <div className="field">
-              <label>Studio</label>
-              <input value={user.studioName || ''} readOnly disabled />
-              <p className="muted" style={{ fontSize: '12px', marginTop: '6px' }}>
-                Each studio has one owner. This studio is tied to your account.
-              </p>
-            </div>
+            <>
+              <div className="field">
+                <label>Studio</label>
+                <input value={user.studioName || ''} readOnly disabled />
+                <p className="muted" style={{ fontSize: '12px', marginTop: '6px' }}>
+                  Each studio has one owner. This studio is tied to your account.
+                </p>
+              </div>
+              <div className={`recurring-toggle${form.showManagedLabel ? ' active' : ''}`}>
+                <div
+                  className="recurring-toggle-row"
+                  onClick={() =>
+                    setForm((f) => ({ ...f, showManagedLabel: !f.showManagedLabel }))
+                  }
+                >
+                  <div className="recurring-toggle-label">
+                    <strong>Show &ldquo;Studio Managed&rdquo; for Managed Coaches</strong>
+                    <span>
+                      Adds a smaller label next to managed coaches wherever they are listed.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className={`switch${form.showManagedLabel ? ' on' : ''}`}
+                    aria-pressed={form.showManagedLabel}
+                    aria-label='Show "Studio Managed" for managed coaches'
+                  />
+                </div>
+              </div>
+            </>
           )}
 
           {isStudent && (

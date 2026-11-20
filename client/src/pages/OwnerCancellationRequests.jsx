@@ -5,6 +5,7 @@ import { api } from '../api/client.js';
 import { useToast } from '../components/Toast.jsx';
 import Modal from '../components/Modal.jsx';
 import SettlementRequests from '../components/owner/SettlementRequests.jsx';
+import ManagedLabel, { withManagedSuffix } from '../components/ManagedLabel.jsx';
 import { WEEKDAYS, fmtDate, fmtTimeRange } from '../lib/format.js';
 
 export default function OwnerCancellationRequests() {
@@ -60,8 +61,11 @@ export default function OwnerCancellationRequests() {
 
   const requests = requestsQuery.data?.requests || [];
   const coaches = studioQuery.data?.teachers || [];
+  const showManagedLabel = studioQuery.data?.studio?.showManagedLabel === true;
   const busy = applyRequest.isPending || dismissRequest.isPending || fillRequest.isPending;
   const substitutes = coaches.filter((coach) => coach.id !== fillFor?.teacherId);
+  const coachManaged = (teacherId) =>
+    coaches.find((coach) => coach.id === teacherId)?.ownerManaged === true;
 
   return (
     <div className="container">
@@ -100,7 +104,10 @@ export default function OwnerCancellationRequests() {
             return (
               <div className="list-row" key={request.id} style={{ alignItems: 'flex-start' }}>
                 <div className="grow">
-                  <strong>{request.teacherName}</strong>
+                  <strong>
+                    {request.teacherName}
+                    <ManagedLabel show={showManagedLabel && coachManaged(request.teacherId)} />
+                  </strong>
                   <div>{request.actionLabel}</div>
                   <div className="contact">
                     {when}
@@ -184,7 +191,10 @@ export default function OwnerCancellationRequests() {
                   <option value="">Choose a coach</option>
                   {substitutes.map((coach) => (
                     <option key={coach.id} value={coach.id}>
-                      {coach.fullName}
+                      {withManagedSuffix(coach.fullName, {
+                        show: showManagedLabel,
+                        managed: coach.ownerManaged,
+                      })}
                     </option>
                   ))}
                 </select>

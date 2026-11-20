@@ -3,6 +3,7 @@ import { api } from '../../api/client.js';
 import { useToast } from '../Toast.jsx';
 import { fmtDate, fmtPrice, fmtTimeRange } from '../../lib/format.js';
 import { METHOD_LABEL } from '../payments/CoachPayments.jsx';
+import { withManagedSuffix } from '../ManagedLabel.jsx';
 
 export const settlementRequestsKey = ['owner-settlement-requests'];
 
@@ -14,9 +15,12 @@ export function useSettlementRequests() {
   });
 }
 
-function LessonRow({ item, amountCents, amountNote, actionLabel, onSettle, busy }) {
+function LessonRow({ item, amountCents, amountNote, actionLabel, onSettle, busy, showManagedLabel, teachers }) {
   const who = item.childName || item.studentName;
-  const detail = [item.teacherName];
+  const managed = teachers?.find((t) => t.id === item.teacherId)?.ownerManaged === true;
+  const detail = [
+    withManagedSuffix(item.teacherName, { show: showManagedLabel, managed }),
+  ];
   if (item.childName) detail.push(`Parent: ${item.studentName}`);
   if (item.paymentPartnerName) detail.push(`Split with ${item.paymentPartnerName}`);
   const methods = item.methods.map((m) => METHOD_LABEL[m] || m).join(' + ');
@@ -52,6 +56,12 @@ export default function SettlementRequests() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const requestsQuery = useSettlementRequests();
+  const studioQuery = useQuery({
+    queryKey: ['owner-studio'],
+    queryFn: () => api('/owner/studio'),
+  });
+  const showManagedLabel = studioQuery.data?.studio?.showManagedLabel === true;
+  const teachers = studioQuery.data?.teachers || [];
 
   const settle = useMutation({
     mutationFn: ({ completionId, direction }) =>
@@ -97,6 +107,8 @@ export default function SettlementRequests() {
               amountNote="Floor fee"
               actionLabel="Floor Fee Received"
               busy={settle.isPending}
+              showManagedLabel={showManagedLabel}
+              teachers={teachers}
               onSettle={() => settle.mutate({ completionId: item.completionId, direction: item.direction })}
             />
           ))
@@ -121,6 +133,8 @@ export default function SettlementRequests() {
               amountNote={`Coach share · ${fmtPrice(item.floorFeeCents)} fee kept`}
               actionLabel="Payout Sent"
               busy={settle.isPending}
+              showManagedLabel={showManagedLabel}
+              teachers={teachers}
               onSettle={() => settle.mutate({ completionId: item.completionId, direction: item.direction })}
             />
           ))}

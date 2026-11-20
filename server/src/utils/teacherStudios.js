@@ -1,12 +1,18 @@
 import { query } from '../db.js';
 
 export function mapStudioRow(row) {
-  return { id: row.id, name: row.name, slug: row.slug };
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    showManagedLabel: row.show_managed_label === true,
+    ownerManaged: row.owner_managed === true,
+  };
 }
 
 export async function getTeacherStudios(teacherId) {
   const { rows } = await query(
-    `SELECT s.id, s.name, s.slug
+    `SELECT s.id, s.name, s.slug, s.show_managed_label, ts.owner_managed
        FROM studios s
        JOIN teacher_studios ts ON ts.studio_id = s.id
       WHERE ts.teacher_id = $1
@@ -18,7 +24,7 @@ export async function getTeacherStudios(teacherId) {
 
 export async function teacherListedAtStudio(teacherId, studioSlug) {
   const { rows } = await query(
-    `SELECT s.id, s.name, s.slug
+    `SELECT s.id, s.name, s.slug, s.show_managed_label, ts.owner_managed
        FROM studios s
        JOIN teacher_studios ts ON ts.studio_id = s.id
       WHERE ts.teacher_id = $1 AND s.slug = $2`,

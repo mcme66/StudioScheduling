@@ -10,6 +10,7 @@ import {
   fmtTimeRange,
 } from '../lib/format.js';
 import StudioRoomsSchedule from '../components/StudioRoomsSchedule.jsx';
+import ManagedLabel from '../components/ManagedLabel.jsx';
 
 function instructorSections(teachers, tiers) {
   const tierById = new Map((tiers || []).map((tier) => [tier.id, tier]));
@@ -36,11 +37,14 @@ function instructorSections(teachers, tiers) {
   return sections;
 }
 
-function InstructorCard({ teacher, slug }) {
+function InstructorCard({ teacher, slug, showManagedLabel }) {
   return (
     <div className="instructor-card">
       <div className="instructor-heading">
-        <h3>{teacher.fullName}</h3>
+        <h3>
+          {teacher.fullName}
+          <ManagedLabel show={showManagedLabel && teacher.ownerManaged} />
+        </h3>
         {teacher.tierName && <div className="contact">{teacher.tierName}</div>}
       </div>
       {teacher.bio && <p className="bio">{teacher.bio}</p>}
@@ -219,7 +223,12 @@ export default function StudioDetail() {
                         >
                           <div className="slot-dot" />
                           <div className="slot-info">
-                            <div className="slot-time">{r.teacherName}</div>
+                            <div className="slot-time">
+                              {r.teacherName}
+                              <ManagedLabel
+                                show={availabilityQuery.data.showManagedLabel && r.ownerManaged}
+                              />
+                            </div>
                             {r.tierName && <div className="contact">{r.tierName}</div>}
                             <div className="slot-meta">
                               {fmtDate(r.lessonDate, { weekday: 'long', month: 'short', day: 'numeric' })} ·{' '}
@@ -260,7 +269,12 @@ export default function StudioDetail() {
                 )}
                 <div className="instructor-grid">
                   {section.teachers.map((teacher) => (
-                    <InstructorCard key={teacher.id} teacher={teacher} slug={slug} />
+                    <InstructorCard
+                      key={teacher.id}
+                      teacher={teacher}
+                      slug={slug}
+                      showManagedLabel={data.studio.showManagedLabel}
+                    />
                   ))}
                 </div>
               </section>

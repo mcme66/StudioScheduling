@@ -10,6 +10,7 @@ import LessonDefaultsCard from '../components/owner/LessonDefaultsCard.jsx';
 import Modal, { ModalOption } from '../components/Modal.jsx';
 import AddToCalendar from '../components/AddToCalendar.jsx';
 import StudioRoomsSchedule from '../components/StudioRoomsSchedule.jsx';
+import ManagedLabel from '../components/ManagedLabel.jsx';
 import {
   WEEKDAYS,
   fmtTime,
@@ -517,7 +518,16 @@ export default function TeacherDashboard({ ownerTeacher = null }) {
         </p>
       )}
       <h1 className="page-title">
-        {ownerTeacher ? `${ownerTeacher.fullName}’s schedule` : 'Your schedule'}
+        {ownerTeacher ? (
+          <>
+            {ownerTeacher.fullName}’s schedule
+            <ManagedLabel
+              show={myStudiosQuery.data?.studio?.showManagedLabel && ownerTeacher.ownerManaged}
+            />
+          </>
+        ) : (
+          'Your schedule'
+        )}
       </h1>
       <p className="page-sub">
         {activeTab === 'payments'

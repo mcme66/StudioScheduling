@@ -24,6 +24,7 @@ function mapStudio(row) {
     description: row.description,
     instructorCount: Number(row.instructor_count ?? 0),
     hasOwner: row.has_owner === true,
+    showManagedLabel: row.show_managed_label === true,
   };
 }
 
@@ -37,6 +38,7 @@ function mapTeacher(row) {
     activeSlots: Number(row.active_slots),
     tierId: row.tier_id || null,
     tierName: row.tier_name || null,
+    ownerManaged: row.owner_managed === true,
   };
 }
 
@@ -44,7 +46,7 @@ studiosRouter.get(
   '/',
   asyncHandler(async (_req, res) => {
     const { rows } = await query(
-      `SELECT s.id, s.name, s.slug, s.description,
+      `SELECT s.id, s.name, s.slug, s.description, s.show_managed_label,
               COUNT(DISTINCT t.id) AS instructor_count,
               EXISTS (
                 SELECT 1 FROM studio_owners so WHERE so.studio_id = s.id
@@ -94,9 +96,10 @@ studiosRouter.get(
       throw new HttpError(400, 'You can only search up to 5 weeks ahead.');
     }
 
-    const { rows: studioRows } = await query('SELECT id, name, slug FROM studios WHERE slug = $1', [
-      req.params.slug,
-    ]);
+    const { rows: studioRows } = await query(
+      'SELECT id, name, slug, show_managed_label FROM studios WHERE slug = $1',
+      [req.params.slug],
+    );
     const studio = studioRows[0];
     if (!studio) throw new HttpError(404, 'Studio not found.');
 
@@ -104,7 +107,7 @@ studiosRouter.get(
 
     const { rows } = await query(
       `SELECT s.id AS slot_id, s.start_time, s.duration_min, s.price_cents,
-              t.id AS teacher_id, t.full_name, ct.name AS tier_name
+              t.id AS teacher_id, t.full_name, ct.name AS tier_name, ts.owner_managed
          FROM slots s
          JOIN teachers t ON t.id = s.teacher_id
          JOIN teacher_studios ts ON ts.teacher_id = t.id AND ts.studio_id = $1
@@ -153,6 +156,7 @@ studiosRouter.get(
       date,
       from,
       to,
+      showManagedLabel: studio.show_managed_label === true,
       results: rows
         .filter((r) => !isLessonPast(date, fmtTime(r.start_time)))
         .map((r) => ({
@@ -160,6 +164,7 @@ studiosRouter.get(
           teacherId: r.teacher_id,
           teacherName: r.full_name,
           tierName: r.tier_name || null,
+          ownerManaged: r.owner_managed === true,
           startTime: fmtTime(r.start_time),
           durationMin: r.duration_min,
           priceCents: r.price_cents,
@@ -173,7 +178,7 @@ studiosRouter.get(
   '/:slug',
   asyncHandler(async (req, res) => {
     const { rows: studioRows } = await query(
-      `SELECT s.id, s.name, s.slug, s.description,
+      `SELECT s.id, s.name, s.slug, s.description, s.show_managed_label,
               COUNT(DISTINCT t.id) AS instructor_count
          FROM studios s
          LEFT JOIN teacher_studios ts ON ts.studio_id = s.id
@@ -188,7 +193,7 @@ studiosRouter.get(
     const [teachers, rooms, classSchedules, tiers] = await Promise.all([
       query(
         `SELECT t.id, t.full_name, t.bio, t.default_price_cents, t.default_duration_min,
-                ct.id AS tier_id, ct.name AS tier_name,
+                ct.id AS tier_id, ct.name AS tier_name, ts.owner_managed,
                 COUNT(sl.id) FILTER (WHERE sl.active AND sl.one_off_date IS NULL) AS active_slots
            FROM teachers t
            JOIN teacher_studios ts ON ts.teacher_id = t.id
@@ -196,7 +201,7 @@ studiosRouter.get(
            LEFT JOIN slots sl ON sl.teacher_id = t.id
           WHERE ts.studio_id = $1
             AND t.is_active
-          GROUP BY t.id, ct.id
+          GROUP BY t.id, ct.id, ts.owner_managed
           ORDER BY ct.sort_order NULLS LAST, ct.id NULLS LAST, t.full_name`,
         [studio.id],
       ).then((r) => r.rows),

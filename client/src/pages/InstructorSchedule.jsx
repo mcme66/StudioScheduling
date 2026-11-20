@@ -7,6 +7,7 @@ import { useToast } from '../components/Toast.jsx';
 import ScheduleInfoPanel from '../components/ScheduleInfoPanel.jsx';
 import Modal, { ModalOption } from '../components/Modal.jsx';
 import AddToCalendar from '../components/AddToCalendar.jsx';
+import ManagedLabel from '../components/ManagedLabel.jsx';
 import {
   WEEKDAYS,
   fmtTime,
@@ -272,6 +273,11 @@ export default function InstructorSchedule() {
       </Link>
       <h1 className="page-title" style={{ marginTop: '0.5rem' }}>
         {data?.teacher?.fullName || 'Schedule'}
+        <ManagedLabel
+          show={
+            data?.teacher?.studio?.showManagedLabel && data?.teacher?.studio?.ownerManaged
+          }
+        />
       </h1>
       {data?.teacher?.bio && <p className="page-sub">{data.teacher.bio}</p>}
 

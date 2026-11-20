@@ -1836,6 +1836,98 @@ a:hover {
   background: var(--green-light);
   font-size: 14px;
 }
+/* Keep "Studio Managed" on the same line as the coach name. */
+*:has(> .managed-label) {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+.managed-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+  flex: 0 1 auto;
+  margin-left: 0;
+  font-size: 0.55em;
+  font-weight: 500;
+  line-height: 1.15;
+  color: var(--muted);
+  vertical-align: baseline;
+  white-space: normal;
+}
+/* On instructor tiles, pin the label to the right edge (~1/4 width). */
+.instructor-card h3:has(> .managed-label) {
+  justify-content: space-between;
+  width: 100%;
+}
+.instructor-card h3 .managed-label {
+  flex: 0 1 25%;
+  max-width: 25%;
+  margin-left: auto;
+  justify-content: flex-end;
+  text-align: right;
+}
+.managed-info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 1.05em;
+  height: 1.05em;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  cursor: help;
+  outline: none;
+}
+.managed-info-mark {
+  font-size: 0.72em;
+  font-weight: 700;
+  font-style: italic;
+  line-height: 1;
+  text-transform: lowercase;
+}
+.managed-info-tip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 40;
+  width: max-content;
+  max-width: 220px;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  background: var(--ink, #2c2a26);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  font-style: normal;
+  line-height: 1.35;
+  text-align: left;
+  white-space: normal;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(4px);
+  transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s;
+}
+.managed-info-tip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin-left: -5px;
+  border: 5px solid transparent;
+  border-top-color: var(--ink, #2c2a26);
+}
+.managed-info:hover .managed-info-tip,
+.managed-info:focus .managed-info-tip,
+.managed-info:focus-visible .managed-info-tip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
 
 /* Studio checklist (teacher dashboard) */
 .studio-checklist {

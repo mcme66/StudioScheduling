@@ -4,6 +4,7 @@ import { api } from '../../api/client.js';
 import { useToast } from '../Toast.jsx';
 import ClassScheduleGrid from '../ClassScheduleGrid.jsx';
 import { WEEKDAYS, fromTwelveHour, toTwelveHour } from '../../lib/format.js';
+import { withManagedSuffix } from '../ManagedLabel.jsx';
 
 const DISPLAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 const HOURS_12 = Array.from({ length: 12 }, (_, i) => String(i + 1));
@@ -326,7 +327,10 @@ export default function ScheduleTab({ data }) {
                 <option value="">Unassigned</option>
                 {teachers.map((t) => (
                   <option key={t.id} value={t.id}>
-                    {t.fullName}
+                    {withManagedSuffix(t.fullName, {
+                      show: data.studio?.showManagedLabel,
+                      managed: t.ownerManaged,
+                    })}
                     {t.isActive ? '' : ' (inactive)'}
                   </option>
                 ))}

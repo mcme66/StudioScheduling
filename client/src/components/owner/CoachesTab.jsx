@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/client.js';
 import { useToast } from '../Toast.jsx';
 import { fmtDate, fmtPrice } from '../../lib/format.js';
+import ManagedLabel from '../ManagedLabel.jsx';
 
 const PRESETS = [
   { id: 'today', label: 'Today' },
@@ -144,7 +145,7 @@ function TiersEditor() {
           </div>
         </div>
       ))}
-      {tiers.length < 5 && (
+      {(tiers.length < 5 || editingId) && (
         <form
           className="stack"
           style={{ marginTop: '0.75rem' }}
@@ -243,6 +244,7 @@ export default function CoachesTab() {
     queryFn: () => api('/owner/studio'),
   });
   const tiers = studioQuery.data?.tiers || [];
+  const showManagedLabel = studioQuery.data?.studio?.showManagedLabel === true;
 
   const setManaged = useMutation({
     mutationFn: ({ id, managed }) =>
@@ -362,7 +364,10 @@ export default function CoachesTab() {
                     }}
                   >
                     <td>
-                      <div>{coach.fullName}</div>
+                      <div>
+                        {coach.fullName}
+                        <ManagedLabel show={showManagedLabel && coach.ownerManaged} />
+                      </div>
                       {!coach.isActive && <div className="contact">Inactive</div>}
                       {coach.tierName && <div className="contact">{coach.tierName}</div>}
                       <div

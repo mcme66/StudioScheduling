@@ -132,6 +132,7 @@ const studioSchema = z.object({
   floorFeeFlatCents: z.number().int().min(0).max(10_000_000).optional(),
   studioStudentFloorFeePercent: z.number().min(0).max(100).optional(),
   studioStudentFloorFeeCents: z.number().int().min(0).max(10_000_000).optional(),
+  showManagedLabel: z.boolean().optional(),
 });
 
 const tierSchema = z.object({
@@ -190,7 +191,8 @@ async function ownerStudioId(userId) {
 async function loadStudioPayload(studioId) {
   const { rows: studioRows } = await query(
     `SELECT id, name, slug, description, floor_fee_percent, floor_fee_flat_cents,
-            studio_student_floor_fee_percent, studio_student_floor_fee_cents
+            studio_student_floor_fee_percent, studio_student_floor_fee_cents,
+            show_managed_label
        FROM studios WHERE id = $1`,
     [studioId],
   );
@@ -224,6 +226,7 @@ async function loadStudioPayload(studioId) {
       floorFeeFlatCents: Number(studio.floor_fee_flat_cents) || 0,
       studioStudentFloorFeePercent: Number(studio.studio_student_floor_fee_percent) || 0,
       studioStudentFloorFeeCents: Number(studio.studio_student_floor_fee_cents) || 0,
+      showManagedLabel: studio.show_managed_label === true,
     },
     rooms,
     classSchedules,
@@ -825,6 +828,10 @@ ownerRouter.patch(
     if (data.studioStudentFloorFeeCents !== undefined) {
       sets.push(`studio_student_floor_fee_cents = $${i++}`);
       values.push(data.studioStudentFloorFeeCents);
+    }
+    if (data.showManagedLabel !== undefined) {
+      sets.push(`show_managed_label = $${i++}`);
+      values.push(data.showManagedLabel);
     }
     if (sets.length) {
       values.push(studioId);

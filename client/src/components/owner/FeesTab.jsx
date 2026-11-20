@@ -14,12 +14,13 @@ import {
   thisMonthAnchor,
   thisWeekAnchor,
 } from '../../lib/lessonRange.js';
+import ManagedLabel from '../ManagedLabel.jsx';
 
 function dollars(cents) {
   return String(((cents ?? 0) / 100).toFixed(2)).replace(/\.00$/, '');
 }
 
-function BalancesCard() {
+function BalancesCard({ showManagedLabel }) {
   const balancesQuery = useQuery({
     queryKey: ['owner-balances'],
     queryFn: () => api('/owner/balances'),
@@ -52,7 +53,7 @@ function BalancesCard() {
               <tr key={c.id}>
                 <td>
                   {c.fullName}
-                  {c.ownerManaged && <span className="contact"> Managed</span>}
+                  <ManagedLabel show={showManagedLabel && c.ownerManaged} />
                 </td>
                 <td className="num">{c.floorFeesOwedCents > 0 ? fmtPrice(c.floorFeesOwedCents) : '—'}</td>
                 <td className="num">{c.payoutOwedCents > 0 ? fmtPrice(c.payoutOwedCents) : '—'}</td>
@@ -251,6 +252,12 @@ export default function FeesTab({ studio, teachers }) {
                   <tr key={c.id}>
                     <td>
                       {c.fullName}
+                      <ManagedLabel
+                        show={
+                          studio.showManagedLabel &&
+                          teachers.find((t) => t.id === c.id)?.ownerManaged
+                        }
+                      />
                       {!c.isActive && <span className="contact"> Inactive</span>}
                       {c.floorFeeExempt && <span className="contact"> Exempt</span>}
                     </td>
@@ -290,15 +297,23 @@ export default function FeesTab({ studio, teachers }) {
                     {week.coaches.length === 0 ? (
                       <p className="muted" style={{ fontSize: '13px' }}>No lessons this week.</p>
                     ) : (
-                      week.coaches.map((c) => (
-                        <div className="list-row" key={c.id}>
-                          <div className="grow">{teachers.find((t) => t.id === c.id)?.fullName || 'Coach'}</div>
-                          <span className="muted" style={{ fontSize: '13px' }}>
-                            {c.lessonCount} lesson{c.lessonCount === 1 ? '' : 's'}
-                          </span>
-                          <strong>{fmtPrice(c.floorFeeCents)}</strong>
-                        </div>
-                      ))
+                      week.coaches.map((c) => {
+                        const coach = teachers.find((t) => t.id === c.id);
+                        return (
+                          <div className="list-row" key={c.id}>
+                            <div className="grow">
+                              {coach?.fullName || 'Coach'}
+                              <ManagedLabel
+                                show={studio.showManagedLabel && coach?.ownerManaged}
+                              />
+                            </div>
+                            <span className="muted" style={{ fontSize: '13px' }}>
+                              {c.lessonCount} lesson{c.lessonCount === 1 ? '' : 's'}
+                            </span>
+                            <strong>{fmtPrice(c.floorFeeCents)}</strong>
+                          </div>
+                        );
+                      })
                     )}
                   </div>
                 ))}
@@ -308,7 +323,7 @@ export default function FeesTab({ studio, teachers }) {
         )}
       </div>
 
-      <BalancesCard />
+      <BalancesCard showManagedLabel={studio.showManagedLabel === true} />
     </div>
   );
 }
