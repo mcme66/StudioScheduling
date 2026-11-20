@@ -10,11 +10,55 @@ import {
   todayISO,
   weekdayOf,
   isLessonPast,
+  isDateInSeries,
 } from '../utils/week.js';
 import { listRooms, listClassSchedules } from '../utils/classSchedules.js';
 import { listCoachTiers } from '../utils/coachTiers.js';
 
 export const studiosRouter = Router();
+
+const fmtDate = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : d);
+
+/** Active lesson times for the current week (filled or open). */
+async function weekSlotCountsByTeacher(teacherIds) {
+  const counts = new Map(teacherIds.map((id) => [id, 0]));
+  if (!teacherIds.length) return counts;
+
+  const monday = getMonday(todayISO());
+  const sunday = dateForWeekday(monday, 0);
+  const { rows } = await query(
+    `SELECT teacher_id, weekday, one_off_date, series_start_date, series_end_date
+       FROM slots
+      WHERE teacher_id = ANY($1::int[])
+        AND active = true
+        AND (
+          (one_off_date IS NOT NULL AND one_off_date BETWEEN $2 AND $3)
+          OR (
+            one_off_date IS NULL
+            AND (series_start_date IS NULL OR series_start_date <= $3)
+            AND (series_end_date IS NULL OR series_end_date >= $2)
+          )
+        )`,
+    [teacherIds, monday, sunday],
+  );
+
+  for (const row of rows) {
+    if (row.one_off_date == null) {
+      const lessonDate = dateForWeekday(monday, row.weekday);
+      if (
+        !isDateInSeries(
+          lessonDate,
+          row.series_start_date ? fmtDate(row.series_start_date) : null,
+          row.series_end_date ? fmtDate(row.series_end_date) : null,
+        )
+      ) {
+        continue;
+      }
+    }
+    counts.set(row.teacher_id, (counts.get(row.teacher_id) || 0) + 1);
+  }
+  return counts;
+}
 
 function mapStudio(row) {
   return {
@@ -193,15 +237,12 @@ studiosRouter.get(
     const [teachers, rooms, classSchedules, tiers] = await Promise.all([
       query(
         `SELECT t.id, t.full_name, t.bio, t.default_price_cents, t.default_duration_min,
-                ct.id AS tier_id, ct.name AS tier_name, ts.owner_managed,
-                COUNT(sl.id) FILTER (WHERE sl.active AND sl.one_off_date IS NULL) AS active_slots
+                ct.id AS tier_id, ct.name AS tier_name, ts.owner_managed
            FROM teachers t
            JOIN teacher_studios ts ON ts.teacher_id = t.id
            LEFT JOIN coach_tiers ct ON ct.id = ts.tier_id
-           LEFT JOIN slots sl ON sl.teacher_id = t.id
           WHERE ts.studio_id = $1
             AND t.is_active
-          GROUP BY t.id, ct.id, ts.owner_managed
           ORDER BY ct.sort_order NULLS LAST, ct.id NULLS LAST, t.full_name`,
         [studio.id],
       ).then((r) => r.rows),
@@ -210,9 +251,13 @@ studiosRouter.get(
       listCoachTiers(studio.id),
     ]);
 
+    const weekSlots = await weekSlotCountsByTeacher(teachers.map((t) => t.id));
+
     res.json({
       studio: mapStudio(studio),
-      teachers: teachers.map(mapTeacher),
+      teachers: teachers.map((t) =>
+        mapTeacher({ ...t, active_slots: weekSlots.get(t.id) || 0 }),
+      ),
       tiers,
       rooms,
       classSchedules,
